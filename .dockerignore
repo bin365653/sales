@@ -1,0 +1,25 @@
+# 依赖、构建产物与本地文件不进入镜像
+node_modules
+.next
+out
+build
+coverage
+
+# 版本与文档
+.git
+.github
+.vscode
+.idea
+*.md
+!package-lock.json
+
+# 环境与密钥
+.env
+.env.*
+!.env.example
+
+# 测试与临时
+tests
+.verify
+pgdata-verify
+*.log

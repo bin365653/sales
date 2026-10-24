@@ -1,0 +1,47 @@
+# 勤策 AI 销售作战台 V1.0 —— 本地与云端统一编排（实施计划 §8.5）
+# 用法：
+#   一键起整栈（演示/验收）：docker compose up -d --build
+#   仅起数据库（日常开发）：  docker compose up -d postgres
+# 生产部署：同一文件部署到 2C4G 云服务器，前置 Nginx + HTTPS；
+#   届时务必通过 .env 覆盖全部默认口令，并移除 5432 端口映射。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-qince}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qince_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-qince_sales}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-qince} -d ${POSTGRES_DB:-qince_sales}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    ports:
+      # 仅供宿主机开发工具直连；生产环境删除此映射
+      - "127.0.0.1:5432:5432"
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-qince}:${POSTGRES_PASSWORD:-qince_local_dev}@postgres:5432/${POSTGRES_DB:-qince_sales}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-qince-admin-2026}
+      ADMIN_NAME: ${ADMIN_NAME:-管理员}
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

@@ -1,0 +1,35 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+*.tsbuildinfo
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files（.env.example 除外，必须入库）
+.env
+.env.local
+.env.*.local
+
+# vercel
+.vercel
+
+# testing
+/coverage
+
+# 本地内嵌数据库验证用
+/.verify/
+/pgdata-verify/

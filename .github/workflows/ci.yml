@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    name: lint / typecheck / test / build / 迁移与 seed 幂等
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: qince
+          POSTGRES_PASSWORD: qince_ci
+          POSTGRES_DB: qince_sales
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qince -d qince_sales"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://qince:qince_ci@localhost:5432/qince_sales
+      ADMIN_USERNAME: admin
+      ADMIN_NAME: 管理员
+      ADMIN_PASSWORD: ci-admin-password
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 生成 Prisma Client
+        run: npx prisma generate
+
+      - name: 应用数据库迁移
+        run: npx prisma migrate deploy
+
+      - name: 重复执行迁移（验收：迁移幂等可重复）
+        run: npx prisma migrate deploy
+
+      - name: 写入基础数据 seed
+        run: npx prisma db seed
+
+      - name: 重复执行 seed（验收：缺则补建、不覆盖既有配置）
+        run: npx prisma db seed
+
+      - name: Lint
+        run: npm run lint
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm run test
+
+      - name: 构建
+        run: npm run build
+
+      - name: 冒烟测试 /api/health 返回 200
+        run: |
+          npm run start &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "health check passed"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "health check failed"
+          exit 1
+
+  docker-smoke:
+    name: docker compose 一键启动冒烟
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建并启动整栈
+        run: docker compose up -d --build
+
+      - name: 等待 /api/health 返回 200（验收：docker compose up 一键起）
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3000/api/health | grep -q '"status":"ok"'; then
+              echo "docker compose smoke passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --tail=200
+          exit 1
+
+      - name: 清理
+        if: always()
+        run: docker compose down -v

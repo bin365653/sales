@@ -1,0 +1,58 @@
+// 勤策 AI 销售作战台 V1.0 —— 数据模型
+// 依据《V1.0工程实施计划-Z》§4 数据库设计
+// 约定：主键 UUID v7；snake_case 物理表/列名；配置类数据只引用不可变 UUID。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- 用户与会话（T01 建表 users；sessions 随 T02 认证任务迁移） ----------
+
+enum user_role {
+  sales
+  admin
+}
+
+enum user_status {
+  active
+  disabled
+}
+
+model User {
+  id           String      @id @default(uuid(7)) @db.Uuid
+  username     String      @unique @db.VarChar(64)
+  passwordHash String      @map("password_hash") @db.VarChar(255)
+  name         String      @db.VarChar(64)
+  role         user_role   @default(sales)
+  status       user_status @default(active)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("users")
+}
+
+// ---------- 客户阶段（K2：UUID + 语义锚点，开放全配置） ----------
+// id：不可变 UUID，业务关联与统计一律引用 id。
+// semanticKey：语义锚点，仅预置阶段持有、不可移除；自定义新增阶段为空。
+//   指标口径锚定 semanticKey（qualified/booked_demo/quoted/won 等）而非名称。
+// code/name/sortOrder/isActive：可由管理员修改；改名改码不破坏历史
+//   （历史可读性由 lead_events.stage_snapshot 快照保障，随 T03 迁移）。
+// 不可物理删除，只能停用（isActive=false）。
+
+model LeadStage {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  semanticKey String?  @unique @map("semantic_key") @db.VarChar(64)
+  code        String   @unique @db.VarChar(64)
+  name        String   @db.VarChar(64)
+  sortOrder   Int      @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("lead_stages")
+}
