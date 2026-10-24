@@ -31,6 +31,34 @@ npm run db:seed
 npm run dev                     # http://localhost:3000
 ```
 
+### 方式三：本机无 Docker 时（Windows 便携版 PostgreSQL）
+
+本仓库 `.verify/`（已 gitignore）可放一份便携版 PostgreSQL 二进制，
+数据目录须放在**纯 ASCII 路径**（中文路径会导致 initdb/postgres 编码错误）：
+
+```bash
+# 一次性准备（版本与 compose 的 postgres:16 对齐）
+npm pack @embedded-postgres/windows-x64@16.4.0-beta.14
+tar -xzf embedded-postgres-windows-x64-16.4.0-beta.14.tgz
+package\native\bin\initdb.exe -D C:\Users\PC\qince-verify-pgdata -U qince -A trust -E UTF8 --locale=C
+
+# 启停
+package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata -l C:\Users\PC\qince-verify-pg.log -o "-p 5432" start
+package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
+```
+
+然后按"方式二"完成迁移、seed 与开发启动（trust 认证仅限本机回环）。
+
+## 认证与数据范围（T02 交付）
+
+- 登录页 `/login`，不开放自助注册（管理员建号，M5）；Argon2id 密码哈希。
+- 数据库会话：Cookie 只存随机 token（HttpOnly + SameSite=Lax，生产 Secure），
+  库存 SHA-256 哈希；30 天滑动续期；登出/停用账号立即失效。
+- 登录限流 5 次/15 分钟（IP+账号，内存滑动窗口）；登录成功/失败、登出、改密写 `audit_logs`。
+- 权限唯一出口 `src/server/permissions`：销售仅见本人线索（越权一律 404），
+  管理员全量 + 配置写；middleware（防线 1）+ 布局/API 守卫（防线 2）。
+- 本人改密 `PATCH /api/auth/password`；管理员重置他人密码随 T15 交付。
+
 ## 常用命令
 
 | 命令 | 说明 |
@@ -38,7 +66,9 @@ npm run dev                     # http://localhost:3000
 | `npm run dev` | 本地开发服务器 |
 | `npm run build` / `npm run start` | 生产构建 / 启动 |
 | `npm run lint` / `npm run typecheck` | ESLint / TypeScript 检查 |
-| `npm run test` | Vitest 单元测试 |
+| `npm run test` | Vitest 单元测试（无需数据库） |
+| `npm run test:integration` | 集成测试（需先启动 PostgreSQL，见上） |
+| `npm run test:all` | 单元 + 集成 |
 | `npm run db:migrate` | 创建并应用开发迁移（prisma migrate dev） |
 | `npm run db:deploy` | 应用已版本化的迁移（部署用，幂等） |
 | `npm run db:seed` | 基础数据 seed（幂等） |

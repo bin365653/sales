@@ -33,7 +33,49 @@ model User {
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  sessions Session[]
+
   @@map("users")
+}
+
+// ---------- 会话（T02）：数据库会话，可服务端撤销 ----------
+// Cookie 只存随机 token；库里存 SHA-256 哈希（实施计划 §4.2/§8.1）。
+// 有效期 30 天滑动续期；登出/停用账号立即失效（校验时检查 revoked_at/expires_at 与用户状态）。
+
+model Session {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ---------- 审计日志（T02 建表并记录登录/登出/改密；查询界面随 T15） ----------
+// 覆盖登录、导入确认、导出、配置修改、删除、密钥更新（实施计划 §4.2）。
+// user_id 逻辑关联不加外键（§4.4，避免高频写入约束开销）；不记密钥与敏感明文。
+
+model AuditLog {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String   @db.VarChar(64)
+  objectType String?  @map("object_type") @db.VarChar(64)
+  objectId   String?  @map("object_id") @db.Uuid
+  detail     Json?    @db.JsonB
+  ip         String?  @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
 }
 
 // ---------- 客户阶段（K2：UUID + 语义锚点，开放全配置） ----------
