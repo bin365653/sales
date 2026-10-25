@@ -19,6 +19,8 @@ const eslintConfig = [
       "build/**",
       "coverage/**",
       "next-env.d.ts",
+      // 本地验证目录（gitignore）：便携版 PostgreSQL、各任务冒烟脚本（.cjs require 风格）
+      ".verify/**",
     ],
   },
 ];

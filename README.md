@@ -377,13 +377,51 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   生产 HTTP 冒烟 31 项（`.verify/t10-smoke.cjs`：入参规则/快照留痕/未确认不落库/
   invalid_ai_run/确认保存/SSR 徽标/历史版本号）全通过。
 
+## 工时填报（T11 交付）
+
+- **范围口径**：`work_time_entries` 落表（迁移 `*_t11_worktime`，K5/C03 批准纳入 V1.0）
+  + `GET/PUT /api/worktime`（实施计划 §6 工时 API 契约）+ P9"每日工时"周历填报页。
+  该表是"每小时有效沟通数"的分母来源（K5），指标计算本身随 T12/T13 交付——
+  本任务保证数据可用：未填报日期查询返回 `hours=null`（看板显示"—"而非 0 的前提）。
+- **每人每日一条（验收项：重复提交覆盖不报错）**：`unique(user_id, work_date)`
+  数据库约束兜底；写入走 Prisma upsert（`INSERT … ON CONFLICT DO UPDATE` 原子覆盖），
+  同日重复提交恒 200、不产生第二行，并发提交也不会撞唯一约束（集成测试 + 冒烟固化）。
+- **值语义**：`hours` DECIMAL(4,1)，0–24、0.5 步进（UIUX §4.9），后端为唯一事实源
+  （Zod Schema 前后端同一份；0.5 的倍数在二进制浮点下精确可表示，`v*2` 整数判定安全）；
+  `hours=0` = 已填报的"当天未工作"，与"未填报"（无行 → `hours=null`）区分，
+  看板两者都显示"—"但语义可分（C03：禁止把未填报显示成 0%）。
+- **日期口径**：`work_date` 纯日期列按 UTC 日期存储（同 `contract_expiry`），
+  值即销售在上海日历（C13）下的工作日；周起点为周一（C13），
+  周历工具 `src/lib/worktime.ts` 的跨月/跨年/闰年边界由单测固化。
+- **API**：`GET /api/worktime?date=YYYY-MM-DD`（单日契约，未填报 `hours=null` 不报错）
+  与 `?week=YYYY-MM-DD`（周内任意一天定位，返回周一→周日 7 天，供周历 UI）二选一；
+  `PUT /api/worktime?date=` body `{ hours }` 录入/修改。工时是个人数据，恒按当前登录
+  用户读写（他人含管理员不可见、无跨人代填）；未登录 401，入参 400 的中文文案与
+  表单提示一字不差。
+- **UI（`/settings/worktime`）**：周历视图（周一~周日 7 格，0–24、0.5 步进，留空 =
+  未填报不提交），默认本周、可切上周/下周/回到本周（链接承载 GET 语义，禁 JS 可查看）；
+  [保存本周] 只提交有改动的日期（失败保留输入可重试）；切换周时有未保存修改先确认；
+  常驻提示"未填报的日期，看板「每小时有效沟通」将显示—"。设置中心完整页签结构随 T15
+  交付，届时本页并入 /settings（`WorktimeWeekForm` 组件直接复用）；导航「设置中心」
+  自 T11 起临时指向本页。
+- **给 T12/T13 的约定**：服务层 `getWorktimeEntry`/`getWorktimeWeek` 是查询唯一实现；
+  指标引擎聚合请直接查 `prisma.workTimeEntry`（`work_date` 范围有索引），遵守
+  "未填报 = 无行（hours 缺失）"即可自然得到"—"语义，无需特判。
+- **验收锚点**：`tests/unit/worktime-schemas.test.ts`（32 例：日期真实性/0.5 步进/
+  0 与 24 边界/date+week 二选一）、`worktime-week.test.ts`（13 例：跨月/跨年/闰年
+  周界与"起点必为周一"不变量）+ `tests/integration/worktime.test.ts`（7 例：
+  upsert 覆盖不报错且行数恒 1/hours=0 与 24/未填报 null/UTC 日期落库/跨年周历/
+  个人数据隔离）；生产 HTTP 冒烟 25 项（`.verify/t11-smoke.cjs`：未登录 401/
+  重复提交覆盖/步进与范围 400/周历回填/SSR 回显与导航入口）全通过，
+  最小闭环冒烟 50 项回归通过。
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
 
 ```bash
-npm run test                # ① 单元测试（219 例，无需数据库）
-npm run test:integration    # ② 集成测试（133 例，需 PostgreSQL，见上文启动方式）
+npm run test                # ① 单元测试（264 例，无需数据库）
+npm run test:integration    # ② 集成测试（140 例，需 PostgreSQL，见上文启动方式）
 npm run test:smoke          # ③ 最小闭环 E2E 冒烟（需先启动应用）
 ```
 
@@ -419,7 +457,10 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
 6. 线索池导入：下载模板 → 填 1 行有效 + 1 行错误数据 → 上传/映射/预览确认 →
    结果汇总与线索池核对。
 7. 线索池导出与个人全量导出：下载 XLSX/ZIP 核对内容与公式转义。
-8. 右上角登出 → 再访问任意页面回到登录页。
+8. 每日工时填报（导航「设置中心」→ `/settings/worktime`，T11 临时入口）：默认本周，
+   填 2–3 天 → [保存本周] → 同一天改数值再保存应覆盖且不报错；切上周再切回数值仍在；
+   留空的日期保持"未填报"（本周已填计数随之变化）。
+9. 右上角登出 → 再访问任意页面回到登录页。
 
 ## 常用命令
 

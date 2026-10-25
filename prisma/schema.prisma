@@ -33,7 +33,8 @@ model User {
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  sessions Session[]
+  sessions        Session[]
+  workTimeEntries WorkTimeEntry[]
 
   @@map("users")
 }
@@ -531,4 +532,27 @@ model AiRun {
   @@index([leadId, createdAt])
   @@index([userId, createdAt])
   @@map("ai_runs")
+}
+
+// ---------- 每日工时（T11，实施计划 §4.2 work_time_entries / K5 / C03） ----------
+// "每小时有效沟通数"的分母来源（K5）：每人每日一条，unique(user_id, work_date)；
+// 重复提交走 upsert 覆盖不报错（T11 验收项），未填报日期看板显示"—"而非 0（C03）。
+// work_date 为纯日期列（@db.Date，按 UTC 日期存储，同 leads.contract_expiry 口径），
+// 值即销售在上海日历（C13）下的工作日；hours 0–24、0.5 步进（UIUX §4.9），
+// 范围/步进校验以后端为唯一事实源。hours=0 合法（"当天未工作"），
+// 与"未填报"（无行，hours=null）区分；看板两者都显示"—"，语义无差。
+
+model WorkTimeEntry {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  workDate  DateTime @map("work_date") @db.Date
+  hours     Decimal  @db.Decimal(4, 1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workDate])
+  @@index([workDate])
+  @@map("work_time_entries")
 }
