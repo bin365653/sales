@@ -7,6 +7,7 @@ import { NEW_LEAD_STAGE_ANCHOR } from "@/lib/stages";
 import { findInactiveBuiltinKeys } from "@/lib/lead-field-validation";
 import { providedBuiltinKeys, parseShanghaiDate } from "@/lib/schemas/lead";
 import {
+  LeadBatchUpdateInput,
   LeadCreateInput,
   LeadListQuery,
   LeadStageTransitionInput,
@@ -587,6 +588,128 @@ export async function listLeads(
   ]);
 
   return { items, total, page: query.page, pageSize: query.pageSize };
+}
+
+// ---------- 批量修改（T04，PATCH /api/leads/batch） ----------
+
+export interface LeadBatchResult {
+  total: number;
+  updated: number;
+  skipped: number;
+}
+
+/**
+ * 批量修改白名单字段（priority / stageId / source / nextContactAt）。
+ * 语义约定：
+ * - 整体拒绝：ids 含不存在、已删除或他人线索时全部不执行（§8.2 批量越权用例）；
+ * - 不做逐条乐观锁：列表勾选场景无逐条 dataVersion，改为统一 dataVersion +1，
+ *   并发编辑者随后保存会触发 409 version_conflict，由页面提示刷新；
+ * - 阶段流转与单条端点同一套校验与留痕（停用阶段拒绝、stage_changed 含快照）；
+ * - 已处于目标阶段的线索跳过该次流转（不 bump 版本、不写事件，与单条幂等一致）。
+ */
+export async function batchUpdateLeads(
+  actor: AuthUser,
+  input: LeadBatchUpdateInput,
+): Promise<LeadBatchResult> {
+  const leads = await prisma.lead.findMany({
+    where: { id: { in: input.ids }, deletedAt: null },
+    include: { stage: true },
+  });
+  // 数量不匹配 = 含不存在/已删除 id；整体拒绝，不做部分成功
+  if (leads.length !== new Set(input.ids).size) {
+    throw new ApiError(404, "not_found", "部分客户不存在或已删除");
+  }
+  for (const lead of leads) {
+    assertLeadWritable(actor, lead.ownerId);
+  }
+
+  const { changes } = input;
+  const targetStage = changes.stageId
+    ? await assertStageSelectable(changes.stageId)
+    : null;
+
+  if (changes.source !== undefined) {
+    // source 是可停用的内置字段：与单条编辑同一检查（含显式 null 清空）
+    const defSet = await loadFieldDefSet();
+    assertBuiltinFieldsProvidable(defSet, ["source"]);
+  }
+
+  const fieldKeys: string[] = [];
+  if (changes.priority !== undefined) {
+    fieldKeys.push("priority");
+  }
+  if (changes.source !== undefined) {
+    fieldKeys.push("source");
+  }
+  if (changes.nextContactAt !== undefined) {
+    fieldKeys.push("next_contact_at");
+  }
+  const nextContactValue = datetimeOrNull(changes.nextContactAt);
+
+  const result = await prisma.$transaction(async (tx) => {
+    let updated = 0;
+    let skipped = 0;
+    for (const lead of leads) {
+      const stageChanged = targetStage !== null && targetStage.id !== lead.stageId;
+      if (!stageChanged && fieldKeys.length === 0) {
+        skipped += 1;
+        continue;
+      }
+      await tx.lead.updateMany({
+        where: { id: lead.id, deletedAt: null },
+        data: {
+          ...(changes.priority !== undefined ? { priority: changes.priority } : {}),
+          ...(changes.source !== undefined ? { source: changes.source } : {}),
+          ...(changes.nextContactAt !== undefined ? { nextContactAt: nextContactValue } : {}),
+          ...(stageChanged ? { stageId: targetStage!.id } : {}),
+          dataVersion: { increment: 1 },
+        },
+      });
+      if (fieldKeys.length > 0) {
+        // detail 只记字段名不记值（客户数据最小化落日志，§8.3）
+        await tx.leadEvent.create({
+          data: {
+            leadId: lead.id,
+            actorId: actor.id,
+            eventType: "updated",
+            detail: { fields: fieldKeys, batch: true } as Prisma.InputJsonValue,
+          },
+        });
+      }
+      if (stageChanged) {
+        await tx.leadEvent.create({
+          data: {
+            leadId: lead.id,
+            actorId: actor.id,
+            eventType: "stage_changed",
+            fromStageId: lead.stageId,
+            toStageId: targetStage!.id,
+            stageSnapshot: {
+              from: buildStageSnapshot(lead.stage),
+              to: buildStageSnapshot(targetStage!),
+            } as unknown as Prisma.InputJsonValue,
+          },
+        });
+      }
+      updated += 1;
+    }
+    return { total: input.ids.length, updated, skipped };
+  });
+
+  await writeAudit({
+    userId: actor.id,
+    action: "lead.batch_updated",
+    objectType: "lead",
+    detail: {
+      total: result.total,
+      updated: result.updated,
+      skipped: result.skipped,
+      fields: fieldKeys,
+      ...(targetStage ? { toStage: { id: targetStage.id, name: targetStage.name } } : {}),
+    },
+  });
+
+  return result;
 }
 
 // ---------- 乐观并发辅助 ----------

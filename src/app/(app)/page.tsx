@@ -1,10 +1,11 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/current-user";
 
 export const dynamic = "force-dynamic";
 
-// P2 工作台首页占位（T02）：数量卡、最近沟通与"建议优先联系"由 T12 交付；
-// 此处仅确认受保护路由可达并展示当前用户。
+// P2 工作台首页（T02 骨架）：数量卡、最近沟通与"建议优先联系"由 T12 交付；
+// 此处提供线索池入口并展示交付路线。
 
 export default async function WorkbenchPage() {
   const user = await getCurrentUser();
@@ -13,19 +14,25 @@ export default async function WorkbenchPage() {
   }
 
   const roadmap = [
-    { label: "T03–T07", text: "线索模型、线索池、导入导出、沟通记录、任务管理" },
+    { label: "T03", text: "线索模型与配置（已交付）" },
+    { label: "T04", text: "线索池与客户详情（已交付）" },
+    { label: "T05–T07", text: "导入导出、沟通记录、任务管理" },
     { label: "T08–T10", text: "AI 客户分析、电话准备卡、沟通摘要草稿" },
-    { label: "T11–T14", text: "工时填报、指标引擎与看板、实验分组" },
-    { label: "T15–T18", text: "设置中心、安全加固、备份恢复、端到端验收" },
+    { label: "T11–T18", text: "工时、指标看板、实验、设置、加固与交付" },
   ];
 
   return (
     <section className="mx-auto max-w-3xl">
       <h1 className="text-2xl font-semibold">你好，{user.name}</h1>
       <p className="mt-2 text-sm text-gray-500">
-        登录与会话已就绪（T02 交付：登录/登出/会话、角色、数据范围、登录限流）。
-        业务模块按《V1.0 工程实施计划》逐步交付：
+        登录、数据范围与线索管理已就绪。工作台数量卡随 T12 交付。
       </p>
+      <Link
+        href="/leads"
+        className="mt-4 inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+      >
+        进入线索池 →
+      </Link>
       <ul className="mt-6 flex flex-col gap-3">
         {roadmap.map((item) => (
           <li

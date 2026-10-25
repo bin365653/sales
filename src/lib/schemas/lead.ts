@@ -246,6 +246,54 @@ export const leadListQuerySchema = z.object({
   ownerId: uuidSchema.optional(),
 });
 
+// ---------- 批量修改（PATCH /api/leads/batch，T04） ----------
+// 白名单刻意收窄为"管理性字段"：优先级、阶段、来源、下次联系时间。
+// 客户名称等画像事实字段不支持批量改——多条客户的事实不可能一次成立，
+// 逐条编辑才是正确语义（实施计划 §6「限定可批量字段」验收项）。
+// strictObject：白名单外字段直接报错，不静默忽略。
+
+export const BATCH_UPDATABLE_FIELDS = [
+  "priority",
+  "stageId",
+  "source",
+  "nextContactAt",
+] as const;
+
+export type BatchUpdatableField = (typeof BATCH_UPDATABLE_FIELDS)[number];
+
+const batchChangesSchema = z
+  .strictObject(
+    {
+      priority: z
+        .enum(LEAD_PRIORITIES, { message: "优先级须为 high / mid / low" })
+        .optional(),
+      stageId: uuidSchema.optional(),
+      source: optionalText(64, "客户来源"),
+      nextContactAt: optionalLocalDatetime,
+    },
+    {
+      error: "批量修改仅支持：优先级、客户阶段、客户来源、下次联系时间",
+    },
+  )
+  .refine(
+    (value) =>
+      BATCH_UPDATABLE_FIELDS.some((field) => value[field] !== undefined),
+    { message: "请至少提供一项要修改的字段" },
+  );
+
+export const leadBatchUpdateSchema = z.object({
+  ids: z
+    .array(uuidSchema)
+    .min(1, "请选择要修改的客户")
+    .max(100, "单次最多修改 100 条客户")
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: "客户列表存在重复",
+    }),
+  changes: batchChangesSchema,
+});
+
+export type LeadBatchUpdateInput = z.infer<typeof leadBatchUpdateSchema>;
+
 export type LeadCreateInput = z.infer<typeof leadCreateSchema>;
 export type LeadUpdateInput = z.infer<typeof leadUpdateSchema>;
 export type LeadStageTransitionInput = z.infer<typeof leadStageTransitionSchema>;

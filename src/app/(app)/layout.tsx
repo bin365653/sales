@@ -9,13 +9,13 @@ export const dynamic = "force-dynamic";
 // 受保护布局（§3 目录结构 (app)）：防线 2 —— 会话真伪在服务端校验，
 // 失效（过期/撤销/停用）一律回登录页。业务导航随 T03+ 逐步点亮。
 
-const NAV_ITEMS: ReadonlyArray<{ label: string; ready: boolean }> = [
-  { label: "工作台", ready: true },
-  { label: "线索池", ready: false },
-  { label: "任务中心", ready: false },
-  { label: "数据看板", ready: false },
-  { label: "实验管理", ready: false },
-  { label: "设置中心", ready: false },
+const NAV_ITEMS: ReadonlyArray<{ label: string; href: string | null }> = [
+  { label: "工作台", href: "/" },
+  { label: "线索池", href: "/leads" },
+  { label: "任务中心", href: null },
+  { label: "数据看板", href: null },
+  { label: "实验管理", href: null },
+  { label: "设置中心", href: null },
 ];
 
 function NavList({ layout }: { layout: "sidebar" | "top" }) {
@@ -28,11 +28,11 @@ function NavList({ layout }: { layout: "sidebar" | "top" }) {
       }
     >
       {NAV_ITEMS.map((item) =>
-        item.ready ? (
+        item.href ? (
           <Link
             key={item.label}
-            href="/"
-            className={`rounded-md bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 ${
+            href={item.href}
+            className={`rounded-md bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition hover:bg-blue-100 ${
               layout === "sidebar" ? "" : "whitespace-nowrap"
             }`}
           >
@@ -72,7 +72,7 @@ export default async function AppLayout({
         <div className="mb-6 px-2 text-lg font-semibold">勤策</div>
         <NavList layout="sidebar" />
         <div className="mt-auto px-2 text-xs text-gray-400">
-          V1.0 · 工程实施计划 T02
+          V1.0 · 工程实施计划 T04
         </div>
       </aside>
 
