@@ -110,6 +110,42 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   （`tests/integration/leads-list.test.ts`）、批量白名单与整体拒绝语义
   （`tests/unit/lead-batch-schema.test.ts` + `tests/integration/leads-batch.test.ts`）。
 
+## 导入与导出（T05 交付）
+
+- **数据模型**（迁移 `*_t05_imports_exports`）：`import_batches` + `import_rows`
+  （两阶段导入，预览只写批次表，确认才写 leads）与 `export_files`
+  （导出物落库 bytea、24 小时过期，支撑"创建与下载分离"契约）。
+- **导入模板**：动态端点 `GET /api/imports/template?format=xlsx|csv`
+  （始终包含当前启用中的自定义字段列）；静态副本 `templates/客户导入模板.{xlsx,csv}`
+  由 `npm run templates:generate` 生成（覆盖内置 23 列 + 填写说明页）。
+- **导入向导 P4**（`/leads/import`）：上传 → 字段映射（表头自动按字段名猜测，
+  手动可调；必须映射客户名称、目标不可重复、必填自定义字段必须在文件中有列）
+  → 预览（全部/有效/错误/重复分栏，错误行按列序给出与表单完全同源的中文原因）
+  → 逐行决定（跳过/新建，重复行默认跳过可仍新建）→ 确认导入 → 结果汇总。
+- **限制与解析**（M8/C14）：.xlsx/.csv 白名单、≤10MB、≤5000 数据行；
+  XLSX 富文本/公式/超链接单元格拍平、日期单元格转 `YYYY-MM-DD`；
+  CSV 关闭数字推断（保护带前导零的号码）、UTF-8 BOM 剥离、
+  无 BOM 时严格 UTF-8 失败回退 GB18030（Excel 中文默认编码）、引号不闭合整体拒绝。
+- **行级校验**：与新建表单同一份 `leadCreateSchema` + 自定义字段校验引擎
+  （`src/lib/import/normalize.ts` 矫正 是/否、日期；`src/server/services/imports.ts`
+  的 `validateRowByMapping` 组装），错误文案与手工录入一字不差。
+- **重复判定（M2）**：手机号标准化（去 +86/86/空格/横线/括号）精确匹配 = 确认重复；
+  名称+城市（大小写/空白不敏感）= 疑似重复；均含库内与文件内（dupRowNo）两种来源；
+  检测范围走权限层数据范围（销售=本人，不泄露他人客户存在性；管理员=全量）。
+  只允许"跳过/仍新建"，绝不更新既有线索。
+- **确认入库**：整体事务（任一行失败全部回滚）；每条线索写 `imported` 事件
+  （detail 含批次 id/行号/文件名）+ `import.confirmed` 审计；批次终态 `confirmed`
+  不可重复确认；确认时逐行复检（预览后字段配置变更 → recheckFailed 计数，不静默错导）。
+- **导出**：`POST /api/exports/leads`（按当前筛选，XLSX/CSV）+
+  `POST /api/exports/me`（个人全量 ZIP：客户 XLSX+CSV；沟通/任务/AI 记录随
+  T06–T08 落表后并入）+ `GET /api/exports/:id/download`（仅创建者可下载）。
+  行集合 = 线索池列表同一 where 构造器（`buildLeadListWhere`），导出范围与列表
+  口径由同一段代码保证；自定义字段列仅当导出结果中存在值时输出（含已停用字段）。
+- **导出安全**：`=` `+` `-` `@` 及制表符开头单元格统一加 `'` 前缀（公式注入转义，
+  XLSX 与 CSV 同规则）；CSV 带 UTF-8 BOM；每用户 5 次/小时限流（429）+ 审计。
+- **越权**：导入批次与导出文件均归属创建者，他人访问/下载一律 404
+  （`tests/integration/imports-flow.test.ts` / `exports.test.ts` 固化）。
+
 ## 常用命令
 
 | 命令 | 说明 |
@@ -123,6 +159,7 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
 | `npm run db:migrate` | 创建并应用开发迁移（prisma migrate dev） |
 | `npm run db:deploy` | 应用已版本化的迁移（部署用，幂等） |
 | `npm run db:seed` | 基础数据 seed（幂等） |
+| `npm run templates:generate` | 重新生成静态导入模板（templates/，字段定义变化后执行） |
 
 ## 目录结构
 

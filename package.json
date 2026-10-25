@@ -20,7 +20,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "templates:generate": "tsx scripts/generate-import-templates.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -29,7 +30,10 @@
     "@node-rs/argon2": "^2.2.2",
     "@prisma/client": "6.19.3",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.2",
     "next": "15.5.28",
+    "papaparse": "^5.7.0",
     "prisma": "6.19.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -40,6 +44,7 @@
     "@eslint/eslintrc": "^3.3.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.0.0",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.0.0",

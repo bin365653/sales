@@ -339,29 +339,12 @@ export async function createLead(
     ? (custom.values as Prisma.InputJsonValue)
     : undefined;
 
-  const created = await prisma.$transaction(async (tx) => {
-    const lead = await tx.lead.create({
-      data: {
-        ...createScalarData(input),
-        stageId: stage.id,
-        ownerId: actor.id,
-        customValues,
-        dataVersion: 1,
-      },
-    });
-    await tx.leadEvent.create({
-      data: {
-        leadId: lead.id,
-        actorId: actor.id,
-        eventType: "created",
-        toStageId: stage.id,
-        stageSnapshot: {
-          to: buildStageSnapshot(stage),
-        } as unknown as Prisma.InputJsonValue,
-      },
-    });
-    return lead;
-  });
+  const created = await prisma.$transaction((tx) =>
+    insertLeadWithEvent(tx, actor, input, customValues, {
+      stageId: stage.id,
+      eventType: "created",
+    }),
+  );
 
   return prisma.lead.findUniqueOrThrow({
     where: { id: created.id },
@@ -369,7 +352,51 @@ export async function createLead(
   });
 }
 
-async function resolveDefaultStage(): Promise<LeadStage> {
+/**
+ * 事务内建线索 + 首事件（created / imported 共用同一套写入路径，
+ * 导入确认（T05）以 imported 事件 + 批次明细留痕，其余语义与新建完全一致）。
+ */
+export async function insertLeadWithEvent(
+  tx: Db,
+  actor: AuthUser,
+  input: LeadCreateInput,
+  customValues: Prisma.InputJsonValue | undefined,
+  options: {
+    stageId: string;
+    eventType: "created" | "imported";
+    eventDetail?: Prisma.InputJsonValue;
+  },
+): Promise<Lead> {
+  const stage = await tx.leadStage.findUniqueOrThrow({
+    where: { id: options.stageId },
+  });
+  const lead = await tx.lead.create({
+    data: {
+      ...createScalarData(input),
+      stageId: stage.id,
+      ownerId: actor.id,
+      customValues,
+      dataVersion: 1,
+    },
+  });
+  await tx.leadEvent.create({
+    data: {
+      leadId: lead.id,
+      actorId: actor.id,
+      eventType: options.eventType,
+      toStageId: stage.id,
+      stageSnapshot: {
+        to: buildStageSnapshot(stage),
+      } as unknown as Prisma.InputJsonValue,
+      ...(options.eventDetail !== undefined
+        ? { detail: options.eventDetail }
+        : {}),
+    },
+  });
+  return lead;
+}
+
+export async function resolveDefaultStage(): Promise<LeadStage> {
   const stage = await getStageBySemanticKey(NEW_LEAD_STAGE_ANCHOR);
   if (!stage || !stage.isActive) {
     throw new ApiError(
@@ -541,21 +568,20 @@ export async function softDeleteLead(actor: AuthUser, id: string): Promise<void>
 
 // ---------- 列表（组合筛选 / 关键词 / 分页） ----------
 
-export async function listLeads(
+/**
+ * 列表/导出共用的 where 构造器（唯一口径）：
+ * 导出（T05）必须与列表查询走同一实现，保证"导出范围正确"不靠约定而靠同一段代码。
+ * 销售的 ownerId 筛选参数无效（其范围已强制本人）；管理员按负责人筛选生效。
+ */
+export function buildLeadListWhere(
   actor: AuthUser,
   query: LeadListQuery,
-): Promise<{
-  items: (Lead & { stage: LeadStage })[];
-  total: number;
-  page: number;
-  pageSize: number;
-}> {
+): Prisma.LeadWhereInput {
   const scope = leadReadScope(actor);
-  // 销售的 ownerId 筛选参数无效（其范围已强制本人）；管理员按负责人筛选生效
   const ownerIdFilter =
     actor.role === "admin" && query.ownerId ? query.ownerId : scope.ownerId;
 
-  const where: Prisma.LeadWhereInput = {
+  return {
     deletedAt: null,
     ...(ownerIdFilter ? { ownerId: ownerIdFilter } : {}),
     ...(query.keyword
@@ -575,6 +601,18 @@ export async function listLeads(
     ...(query.stageId ? { stageId: query.stageId } : {}),
     ...(query.priority ? { priority: query.priority } : {}),
   };
+}
+
+export async function listLeads(
+  actor: AuthUser,
+  query: LeadListQuery,
+): Promise<{
+  items: (Lead & { stage: LeadStage })[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> {
+  const where = buildLeadListWhere(actor, query);
 
   const [items, total] = await Promise.all([
     prisma.lead.findMany({

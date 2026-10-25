@@ -110,6 +110,15 @@ export async function createTestFieldDef(data: {
 }
 
 export async function cleanupTestUsers(): Promise<void> {
+  // 0) 导入批次（import_rows 级联删除）与导出文件（T05，按 user_id 直接清理）
+  if (createdUserIds.length > 0) {
+    await prisma.importBatch.deleteMany({
+      where: { userId: { in: createdUserIds } },
+    });
+    await prisma.exportFile.deleteMany({
+      where: { userId: { in: createdUserIds } },
+    });
+  }
   // 1) 测试用户名下的线索：先删事件再删线索（覆盖夹具与服务层两种创建路径）
   if (createdUserIds.length > 0) {
     const leads = await prisma.lead.findMany({

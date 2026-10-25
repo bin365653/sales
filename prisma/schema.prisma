@@ -234,3 +234,88 @@ model LeadEvent {
   @@index([leadId, occurredAt])
   @@map("lead_events")
 }
+
+// ---------- 导入批次与行（T05，实施计划 §4.2 两阶段导入） ----------
+// 两阶段：上传/映射/预览只写本组表（pending），确认（confirm）才写 leads。
+// raw 保存解析后的原始单元格值；normalized 保存映射+校验后的入参值；
+// errors 为行级错误（字段 + 中文原因），dup_type/dup_lead_id/dup_row_no 记录
+// 重复检出结果（M2：手机号标准化精确 = exact；名称+城市 = fuzzy；含文件内重复）。
+// decision 默认值由预览阶段写入（错误行/重复行 skip，有效行 create_new），确认时可覆盖。
+
+enum import_status {
+  pending
+  confirmed
+  canceled
+}
+
+enum import_dup_type {
+  none
+  exact
+  fuzzy
+}
+
+enum import_decision {
+  skip
+  create_new
+}
+
+model ImportBatch {
+  id         String        @id @default(uuid(7)) @db.Uuid
+  userId     String        @map("user_id") @db.Uuid
+  filename   String        @db.VarChar(255)
+  fileHash   String        @map("file_hash") @db.VarChar(64)
+  headers    Json?         @db.JsonB
+  mapping    Json?         @db.JsonB
+  status     import_status @default(pending)
+  counts     Json?         @db.JsonB
+  confirmedAt DateTime?    @map("confirmed_at") @db.Timestamptz(6)
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  rows ImportRow[]
+
+  @@index([userId, createdAt])
+  @@map("import_batches")
+}
+
+model ImportRow {
+  id        String          @id @default(uuid(7)) @db.Uuid
+  batchId   String          @map("batch_id") @db.Uuid
+  rowNo     Int             @map("row_no")
+  raw       Json            @db.JsonB
+  normalized Json?           @db.JsonB
+  errors    Json?           @db.JsonB
+  hasErrors Boolean         @default(false) @map("has_errors")
+  dupType   import_dup_type @default(none) @map("dup_type")
+  dupLeadId String?         @map("dup_lead_id") @db.Uuid
+  dupRowNo  Int?            @map("dup_row_no")
+  decision  import_decision @default(skip) @map("decision")
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, rowNo])
+  @@index([batchId, dupType])
+  @@map("import_rows")
+}
+
+// ---------- 导出文件（T05） ----------
+// GET /api/exports/:id/download 需要"创建与下载分离"，故生成物落库（bytea）。
+// §4.2 的 17 张业务表未含此表：这是 §6 导出契约（按 id 下载 + 限流 + 审计）的
+// 实现支撑表，非业务实体。内容 24 小时过期，创建新导出时惰性清理过期行。
+
+model ExportFile {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  kind        String   @db.VarChar(16)
+  format      String   @db.VarChar(8)
+  filename    String   @db.VarChar(255)
+  contentType String   @map("content_type") @db.VarChar(128)
+  content     Bytes
+  filters     Json?    @db.JsonB
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("export_files")
+}

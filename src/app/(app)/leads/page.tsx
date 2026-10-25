@@ -8,6 +8,7 @@ import { leadListQuerySchema, type LeadListQuery } from "@/lib/schemas/lead";
 import { toShanghaiDateString, toShanghaiDateTimeString } from "@/lib/format";
 import { LeadFilters } from "@/components/leads/lead-filters";
 import { LeadsTable, type LeadRow } from "@/components/leads/leads-table";
+import { ExportButton } from "@/components/leads/export-button";
 
 export const dynamic = "force-dynamic";
 
@@ -100,15 +101,15 @@ export default async function LeadsPage({
             {user.role === "admin" && !query.ownerId ? " · 全部负责人" : ""}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* 导入/导出入口随 T05 交付 */}
-          <span
-            aria-disabled
-            title="随 T05 交付"
-            className="cursor-default rounded-md border border-dashed border-gray-300 px-3 py-1.5 text-sm text-gray-400"
+        <div className="flex flex-wrap items-center gap-2">
+          {/* 导出范围 = 当前筛选（与列表同一 where 构造器）；导入向导见 /leads/import */}
+          <ExportButton query={query} />
+          <Link
+            href="/leads/import"
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
           >
-            导入 / 导出
-          </span>
+            导入客户
+          </Link>
           <Link
             href="/leads/new"
             className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-blue-700"

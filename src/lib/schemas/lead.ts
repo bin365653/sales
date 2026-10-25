@@ -79,7 +79,10 @@ const optionalBoolean = () =>
       }
       return value;
     },
-    z.boolean().nullable().optional(),
+    z
+      .boolean({ message: "仅支持填写 是 / 否" })
+      .nullable()
+      .optional(),
   );
 
 const dateStringSchema = z
