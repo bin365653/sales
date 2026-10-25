@@ -7,6 +7,11 @@ import { listLeadTasks } from "@/server/services/tasks";
 import { listFieldDefs } from "@/server/services/lead-fields";
 import { listStages } from "@/server/services/stages";
 import { getUserNames } from "@/server/services/users";
+import { listLeadAiRuns } from "@/server/ai/runner";
+import { getTodayUsage } from "@/server/ai/rate-limit";
+import { resolveActivePromptVersion } from "@/server/ai/prompt-registry";
+import { toAiRunView, type AiRunView } from "@/lib/ai-run-view";
+import type { RunTypeValue } from "@/lib/schemas/ai";
 import {
   toDateTimeInputValue,
   toShanghaiDateTimeString,
@@ -34,7 +39,7 @@ export const dynamic = "force-dynamic";
 // P5 客户详情（T04）：画像全部字段 + 核实状态徽标 + 阶段时间线（lead_events）。
 // 服务端完成全部数据整形（时间/文案/字段名映射），客户端组件只负责
 // 查看/编辑切换、阶段流转与删除的交互。沟通记录区块随 T06 交付；
-// 任务区块随 T07 交付；AI 面板随 T09 交付。
+// 任务区块随 T07 交付；AI 面板随 T09 交付（含错误边界，AI 异常不影响页面）。
 
 interface StageSnapshotEntryLike {
   id: string;
@@ -120,6 +125,21 @@ export default async function LeadDetailPage({
     listInteractions(user, id),
     listLeadTasks(user, id),
   ]);
+
+  // AI 面板初始数据（T09）：首屏整形与客户端轮询共用 toAiRunView；
+  // 提示词版本仅展示用，缺失时降级（发起 run 时服务层仍会 fail fast）。
+  const aiRuns: AiRunView[] = (await listLeadAiRuns(user, id).catch(() => [])).map(
+    (run) => toAiRunView(run),
+  );
+  const aiUsage = await getTodayUsage(user.id).catch(() => ({ used: 0, limit: 0 }));
+  const activePromptVersions: Partial<Record<RunTypeValue, number | null>> = {};
+  for (const runType of ["analysis", "call_prep"] as RunTypeValue[]) {
+    try {
+      activePromptVersions[runType] = (await resolveActivePromptVersion(runType)).version;
+    } catch {
+      activePromptVersions[runType] = null;
+    }
+  }
 
   const now = new Date();
   const taskViews = tasks.map((task) =>
@@ -378,6 +398,9 @@ export default async function LeadDetailPage({
       interactions={interactionRows}
       tasks={taskViews}
       formValues={formValues}
+      aiRuns={aiRuns}
+      aiUsage={aiUsage}
+      activePromptVersions={activePromptVersions}
     />
   );
 }

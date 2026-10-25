@@ -262,7 +262,7 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   提示词版本/状态/错误/耗时/数据版本——只含状态元数据，快照与输出全文不进导出）。
 - **真实服务商联调说明**：T08 验收（错误分类/invalid_output/换 provider/密钥安全）
   由自动化测试经注入 fetch 全覆盖；真实模型调用待 C15 首个服务商 base_url+key
-  提供后，在 T09 面板联调时验证。
+  提供后经 T09 面板复核（面板已交付，换 provider 仅改配置，见下节）。
 - **验收锚点**：`tests/unit/ai-crypto.test.ts`（6 例）、`ai-provider.test.ts`
   （9 例：错误分类与重试）、`ai-validator.test.ts`（15 例）、`ai-context.test.ts`
   （4 例：白名单无电话）、`ai-schemas.test.ts`（7 例）+
@@ -271,13 +271,75 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   越权 404/retry 留痕/导出并入）；生产 HTTP 冒烟 19 项（401/密钥不回显/
   failed+provider 分类/轮询终态/重试/用量字段）全通过。
 
+## 详情页 AI 面板（T09 交付）
+
+- **范围口径**：两种 run 的提示词与输出 Schema 已随 T08 交付（`analysis` 8 项 /
+  `call_prep` 6 项，Zod 固化 + seed 版本 v1）；本任务交付详情页 AI 面板
+  （UIUX §4.7 全产品唯一 AI 交互模板的前两种入口）与常规组 guard 接入位，
+  `interaction_summary`（AI 生成摘要）随 T10 以同一模板接入。
+- **P5 AI 面板**（详情页 `AiPanel`，`src/components/leads/ai-panel.tsx`）：
+  - **入口与用量**："AI 客户分析" / "AI 电话准备卡" 双按钮 + 常驻用量行
+    "今日 AI 已用 x/50"；同一客户已有 pending run 时按钮禁用（防并发重复调用）；
+    达到每日上限时禁用并展示 §7.2 文案（发起即计数，失败/重试同占额度，T08）。
+  - **异步执行（§6.2）**：点击 → `POST /api/ai/runs` 创建 run(pending) → 运行卡
+    （"正在生成… 预计需要 10–60 秒；可离开本页，完成后可在「AI 历史」中查看"）→
+    前端 2s 轮询 `GET /api/ai/runs/:id`；再次进入详情页自动续接 pending 轮询
+    （初始 runs 由服务端首屏整形传入，与轮询共用 `toAiRunView` 映射）；
+    轮询上限 90 次（约 3 分钟），超限停止自动刷新并提示到历史查看
+    （服务端执行与留痕不受影响）。
+  - **成功展示（验收项：8+6 项齐全、事实/推断/未知视觉区分）**：渲染前用与后端
+    同一份 Zod Schema（`analysisSchema`/`callPrepSchema`）校验，结构异常降级为
+    "输出内容无法解析"，不整面板崩溃。分析按匹配度徽章（高/中/低/信息不足）→
+    已知事实（绿点）→ 待核实信息（琥珀点）→ 经营痛点 ≤3（每项附"推断依据"）→
+    沟通切入点 → 推荐下一步 → 待核实问题分区渲染，信息不足整段灰底；
+    准备卡按目标 → 开场 → 3 诊断问题 → 2 异议应对 → 确认下一步 →
+    "需要避免的未经核实表述"（红色警示块）渲染，常驻
+    "系统不会自动拨打电话或发送消息"边界与"AI 生成，仅供参考，请核对后使用"徽标；
+    卡头展示生成时间/模型名/提示词版本号。
+  - **失败与重试**：按 `error_type` 映射文案（UIUX §7.3，`AI_ERROR_MESSAGES`）+
+    [重试]（`POST /api/ai/runs/:id/retry` = 新 run、`retry_of_id` 留痕）；
+    409 `ai_not_configured` / 429 `ai_daily_limit` 均以服务端 message 呈现。
+  - **复制（§4.10）**：一律产出纯文本分节格式（`src/lib/ai-copy.ts` 纯函数，
+    单测固化），末尾常驻"(AI 生成,仅供参考,请核对后使用)"；输出结构异常时提示
+    "复制失败，请手动复制"。
+  - **历史**：折叠列表（时间/类型/状态徽章/模型名/提示词版本/输入数据版本），
+    展开只读查看当时输出；顶部展示两种 run 当前启用提示词版本号；
+    空状态文案："尚未生成过 AI 分析。AI 只使用本客户已填写的信息，信息越完整，
+    结果越可靠。"
+- **AI 失败不影响页面其他功能（验收项）**：面板为独立客户端组件并包在
+  `AiPanelErrorBoundary` 内——请求失败/渲染异常只降级面板自身
+  （"AI 面板暂时无法显示"+ 重试按钮），详情页画像/时间线/沟通/任务/编辑流转
+  不受影响；编辑模式下面板不挂载。
+- **常规组 403（T14 接入位）**：`src/server/ai/guard.ts` 的
+  `assertAiAllowedForLead` 在发起与重试的频控**之前**调用（常规组拒绝不消耗
+  每日额度）；T09 阶段恒通过（无分组表），T14 替换为实现并抛
+  `ApiError(403, "ai_control_group")`——服务层契约（403 + 不落 run + 不计数 +
+  重试同拦）已由集成测试固化（`vi.mock` 模拟常规组命中）。
+- **历史 API 扩展**：`GET /api/leads/:id/ai-runs` 响应新增 `usage`（当日
+  used/limit）与 `activePromptVersions`（各 run 类型启用版本号，缺失降级 null）；
+  run 行新增 `modelConfig.{provider,modelName}` 与 `promptVersion.version`
+  （select 白名单，绝无密钥列）。
+- **空线索实测（验收项）**：仅名称线索发起分析/准备卡走完整链路——冒烟经本地假
+  Provider 返回 insufficient 风格输出，断言"匹配度=信息不足 + 空 facts（unknown
+  呈现）+ 待核实问题非空"，结构校验落库成功；提示词红线（仅用输入资料、
+  禁止推测营收/系统/到期时间）随 T08 提示词基线单测覆盖。
+- **真实服务商联调说明**：冒烟的"模型"为脚本内启动的本地假 Provider（返回合规
+  JSON）；接真实 base_url+key 后（C15 提供后）面板行为无需改动——换 provider
+  仅改模型配置（C05），空线索不编造仍需用真实模型人工复核一次。
+- **验收锚点**：`tests/unit/ai-copy.test.ts`（5 例：8+6 项纯文本格式/信息不足
+  占位/结构损坏防御）、`ai-run-view.test.ts`（2 例：Date/ISO 双形态一致映射）+
+  `tests/integration/ai-panel.test.ts`（5 例：常规组 403 不留 run 不计数/
+  重试同拦/历史含模型名与版本号且无密钥/空线索 insufficient 链路/准备卡六项）；
+  生产 HTTP 冒烟 29 项（`.verify/t09-smoke.cjs`：SSR 入口与用量行/空线索 8+6 项/
+  insufficient/历史扩展字段/failed 后页面不受影响/重试留痕/409）全通过。
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
 
 ```bash
-npm run test                # ① 单元测试（207 例，无需数据库）
-npm run test:integration    # ② 集成测试（121 例，需 PostgreSQL，见上文启动方式）
+npm run test                # ① 单元测试（214 例，无需数据库）
+npm run test:integration    # ② 集成测试（126 例，需 PostgreSQL，见上文启动方式）
 npm run test:smoke          # ③ 最小闭环 E2E 冒烟（需先启动应用）
 ```
 
@@ -304,10 +366,14 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
    添加沟通记录，勾选"形成合格线索"→ 阶段自动推进并出现 stage_changed 时间线条目。
 4. 任务中心 `/tasks`：新建任务（截止时间选昨天）→ 今日视图出现该任务且标红逾期 →
    点"完成"填沟通结果并创建下一任务 → 任务变为已完成且显示完成时间与沟通记录链接。
-5. 线索池导入：下载模板 → 填 1 行有效 + 1 行错误数据 → 上传/映射/预览确认 →
+5. 详情页 AI 面板：先在设置接口建一条启用模型配置（或临时指向不可达地址观察
+   失败文案），点"AI 客户分析"→ 运行卡 → 成功后核对 8 项分区（事实/推断/未知
+   分色）、复制按钮、重新生成与历史展开；用仅名称的空线索再跑一次应显示
+   "信息不足"而非编造；点"AI 电话准备卡"核对 6 项与红色警示块。
+6. 线索池导入：下载模板 → 填 1 行有效 + 1 行错误数据 → 上传/映射/预览确认 →
    结果汇总与线索池核对。
-6. 线索池导出与个人全量导出：下载 XLSX/ZIP 核对内容与公式转义。
-7. 右上角登出 → 再访问任意页面回到登录页。
+7. 线索池导出与个人全量导出：下载 XLSX/ZIP 核对内容与公式转义。
+8. 右上角登出 → 再访问任意页面回到登录页。
 
 ## 常用命令
 

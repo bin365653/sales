@@ -17,6 +17,9 @@ import {
   type InteractionView,
 } from "@/components/leads/interactions-panel";
 import { TasksPanel } from "@/components/tasks/tasks-panel";
+import { AiPanelSection, type AiQuotaView } from "@/components/leads/ai-panel";
+import type { AiRunView } from "@/lib/ai-run-view";
+import type { RunTypeValue } from "@/lib/schemas/ai";
 import type { TaskView } from "@/components/tasks/task-view";
 import type { FieldDefRow } from "@/lib/lead-form-fields";
 
@@ -79,6 +82,10 @@ export interface LeadDetailClientProps {
   interactions: InteractionView[];
   tasks: TaskView[];
   formValues: Record<string, string | number | boolean | null>;
+  /** AI 面板初始数据（T09）：runs/用量/启用提示词版本，轮询后由面板自行刷新 */
+  aiRuns: AiRunView[];
+  aiUsage: AiQuotaView;
+  activePromptVersions: Partial<Record<RunTypeValue, number | null>>;
 }
 
 const SELECT_CLASS =
@@ -102,6 +109,9 @@ export function LeadDetailClient({
   interactions,
   tasks,
   formValues,
+  aiRuns,
+  aiUsage,
+  activePromptVersions,
 }: LeadDetailClientProps) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -397,7 +407,7 @@ export function LeadDetailClient({
             </ol>
           </section>
 
-          {/* 沟通记录（T06 交付）；AI 面板随 T09 交付 */}
+          {/* 沟通记录（T06 交付） */}
           <InteractionsPanel
             leadId={lead.id}
             leadName={lead.name}
@@ -413,11 +423,15 @@ export function LeadDetailClient({
             stages={stageOptions}
             tasks={tasks}
           />
-          <div className="flex flex-wrap gap-3 text-sm text-gray-400">
-            <span className="rounded-md border border-dashed border-gray-300 px-3 py-1.5">
-              AI 客户分析（T09）
-            </span>
-          </div>
+          {/* AI 面板（T09 交付）：异步/轮询/失败重试/复制/历史；错误边界内，
+              AI 异常只影响面板自身（验收项） */}
+          <AiPanelSection
+            leadId={lead.id}
+            leadName={lead.name}
+            initialRuns={aiRuns}
+            initialUsage={aiUsage}
+            activePromptVersions={activePromptVersions}
+          />
         </>
       )}
     </div>

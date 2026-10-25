@@ -6,6 +6,7 @@ import { AiRunCreateInput } from "@/lib/schemas/ai";
 import { assertLeadReadable, assertLeadWritable } from "@/server/permissions";
 import { buildAiInput } from "./context";
 import { decryptApiKey } from "./crypto";
+import { assertAiAllowedForLead } from "./guard";
 import { getActiveEndpoint } from "./model-configs";
 import { resolveActivePromptVersion } from "./prompt-registry";
 import { callModel, ProviderError } from "./provider";
@@ -13,7 +14,8 @@ import { correctionInstruction, validateOutput } from "./validator";
 import { countRunsToday, dailyAiLimit } from "./rate-limit";
 
 // Run Logger + 执行编排（T08，实施计划 §7.1 Run Logger/§7.2 执行模型 / PRD §5.5、§6.8）：
-// - 发起：权限（线索写范围）→ 每日频控 → 模型配置/提示词就绪 → 输入快照（白名单）→
+// - 发起：权限（线索写范围）→ 常规组 guard（T14 接入，T09 恒通过）→ 每日频控 →
+//   模型配置/提示词就绪 → 输入快照（白名单）→
 //   落 ai_runs(pending) 后异步执行，接口立即返回（不阻塞详情页，PRD §8）；
 // - 执行：调模型（网络类错误重试）→ 结构校验 → 失败带纠错指令自动重试 1 次 →
 //   仍失败落 invalid_output（供重试入口）；任何终态都写回同一行（全量留痕）；
@@ -64,7 +66,12 @@ async function assertQuota(userId: string): Promise<void> {
 async function requireRunWithAccess(actor: AuthUser, runId: string) {
   const run = await prisma.aiRun.findUnique({
     where: { id: runId },
-    include: { lead: { select: { ownerId: true, deletedAt: true } } },
+    include: {
+      lead: { select: { ownerId: true, deletedAt: true } },
+      // 面板展示用：模型名/服务商与提示词版本号（绝不带出密钥相关列，§8.3）
+      modelConfig: { select: { provider: true, modelName: true } },
+      promptVersion: { select: { version: true } },
+    },
   });
   if (!run || run.lead.deletedAt) {
     throw new ApiError(404, "not_found", "AI 调用记录不存在");
@@ -124,6 +131,8 @@ export async function createAiRun(
 ): Promise<AiRun> {
   const lead = await loadLeadForRun(input.leadId);
   assertLeadWritable(actor, lead.ownerId);
+  // 常规组拦截（T14 接入位）：在频控之前，拒绝不消耗每日额度
+  await assertAiAllowedForLead(lead.id);
   await assertQuota(actor.id);
 
   // 配置/提示词就绪才允许创建 run（fail fast，避免产生必然失败的 pending 行）；
@@ -273,6 +282,8 @@ export async function retryAiRun(
     throw new ApiError(409, "run_not_retryable", "仅失败/超时/格式异常的 AI 调用可重试");
   }
   assertLeadWritable(actor, previous.lead.ownerId);
+  // 重试同样过常规组 guard（T14 接入位）：分组后固定（C04），失败重试也不例外
+  await assertAiAllowedForLead(previous.leadId);
   await assertQuota(actor.id);
 
   const endpoint = await getActiveEndpoint();
@@ -304,7 +315,7 @@ export async function getAiRun(actor: AuthUser, runId: string): Promise<AiRun> {
   return requireRunWithAccess(actor, runId);
 }
 
-/** 历史列表（GET /api/leads/:id/ai-runs，倒序） */
+/** 历史列表（GET /api/leads/:id/ai-runs，倒序；含模型名/提示词版本号供面板展示） */
 export async function listLeadAiRuns(
   actor: AuthUser,
   leadId: string,
@@ -314,5 +325,9 @@ export async function listLeadAiRuns(
   return prisma.aiRun.findMany({
     where: { leadId: lead.id },
     orderBy: { createdAt: "desc" },
+    include: {
+      modelConfig: { select: { provider: true, modelName: true } },
+      promptVersion: { select: { version: true } },
+    },
   });
 }
