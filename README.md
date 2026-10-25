@@ -59,6 +59,32 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   管理员全量 + 配置写；middleware（防线 1）+ 布局/API 守卫（防线 2）。
 - 本人改密 `PATCH /api/auth/password`；管理员重置他人密码随 T15 交付。
 
+## 线索模型与配置（T03 交付）
+
+- **数据模型**（`leads` / `lead_field_defs` / `lead_events`，迁移 `*_t03_leads_field_defs_events`）：
+  - `leads`：PRD §5.3 全字段独立列 + 四个关键事实字段的核实状态列
+    （`current_system_status` 等，unknown/unverified/confirmed）；
+    `custom_values` JSONB 存自定义字段值；`data_version` 乐观并发；
+    `deleted_at` 软删除（历史表永不物理删除）。
+  - `lead_field_defs`：内置字段（23 个，seed 生成，key = 物理列名）与自定义字段
+    统一定义；key/type 不可变；已被使用的字段只能停用（归档）。
+  - `lead_events`：created/imported/updated/stage_changed/deleted 事件流，
+    阶段变更保存前后阶段 UUID + 当时编码/名称快照（`stage_snapshot`）。
+- **阶段全配置**（K2/C02）：`/api/settings/stages` 新增/改名/改码/排序/启停；
+  语义锚点（semanticKey）只随 seed 预置阶段生成，任何 API 无法写入或修改，
+  指标口径锚定语义锚点，改名改码不破坏历史与统计。
+  停用阶段不可作为新流转目标（`stage_inactive`），已处于该阶段的线索不受影响。
+- **自定义字段**（C12）：text/number/date/single_select 四类，值校验引擎
+  `src/lib/lead-field-validation.ts` 前后端共用（必填/长度/范围/正则/选项）；
+  V1.0 不参与筛选与统计。停用的内置/自定义字段出现在提交中会被拒绝，不静默丢弃。
+- **线索 API**：`GET/POST /api/leads`（关键词搜索+组合筛选+分页）、
+  `GET/PATCH/DELETE /api/leads/:id`（详情/局部编辑/软删除）、
+  `PATCH /api/leads/:id/stage`（阶段流转，写 lead_events）。
+  编辑与流转必须携带 `dataVersion`，冲突返回 409 `version_conflict`。
+- **时间口径**：纯日期列（合同到期）按 UTC 日期存储；本地日期时间（下次联系）
+  统一按 Asia/Shanghai（+08:00）解释（决策 C13）。
+- 线索池/详情页 UI 随 T04 交付；本任务交付 API 与服务层（含测试）。
+
 ## 常用命令
 
 | 命令 | 说明 |
@@ -90,3 +116,5 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
 - 客户阶段：业务关联只引用不可变 UUID；预置 13 阶段绑定语义锚点
   （`qualified` / `booked_demo` / `quoted` / `won` / `closed` 等），
   指标口径锚定语义而非名称，改名改码不破坏历史（见 `src/lib/stages.ts`）。
+- 线索字段：内置字段定义由 seed 幂等生成（key = `leads` 物理列名，可启停/排序）；
+  自定义字段值存 `leads.custom_values`（键为字段稳定 key）；字段校验规则以后端为唯一事实源。

@@ -68,3 +68,6 @@ export const REQUIRED_METRIC_ANCHORS = [
 // 沟通记录自动推进阶段使用的锚点（K4/C09，T06 使用）。
 export const QUALIFIED_STAGE_ANCHOR = "qualified";
 export const BOOKED_DEMO_STAGE_ANCHOR = "booked_demo";
+
+// 新建线索缺省阶段的语义锚点（T03 线索服务使用）。
+export const NEW_LEAD_STAGE_ANCHOR = "new_lead";

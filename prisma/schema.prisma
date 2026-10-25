@@ -96,5 +96,141 @@ model LeadStage {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  leads Lead[]
+
   @@map("lead_stages")
+}
+
+// ---------- 线索字段定义（T03，实施计划 §4.2 / C12） ----------
+// 同时管理内置字段（key = leads 物理列名，由 seed 幂等生成，可启停/排序）
+// 与自定义字段（管理员通过 API 新建，key 由管理员指定且此后不可变）。
+// 自定义字段值存 leads.custom_values（键为 key）；V1.0 自定义字段不参与筛选与统计。
+
+enum lead_field_type {
+  text
+  number
+  date
+  single_select
+}
+
+model LeadFieldDef {
+  id         String         @id @default(uuid(7)) @db.Uuid
+  key        String         @unique @db.VarChar(64)
+  label      String         @db.VarChar(64)
+  type       lead_field_type
+  options    Json?          @db.JsonB
+  validation Json?          @db.JsonB
+  isBuiltin  Boolean        @default(false) @map("is_builtin")
+  isActive   Boolean        @default(true) @map("is_active")
+  sortOrder  Int            @map("sort_order")
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([isActive, sortOrder])
+  @@map("lead_field_defs")
+}
+
+// ---------- 客户线索核心表（T03，实施计划 §4.3） ----------
+// PRD §5.3 字段全集落为独立列（便于筛选/索引/导入映射），分四组：
+// 基本信息 / 系统情况 / 采购情况 / 管理。
+// 所有非必填字段允许为空（PRD：不得强迫销售填写虚假数据 → 空值可保存）。
+// 核实状态：四个关键事实字段「值列 + 状态列」成对设计（§4.3），默认 unknown。
+// data_version：乐观并发控制 + AI 输入数据版本号（PRD §5.5）。
+// deleted_at：软删除标记，历史表（lead_events 等）永不物理删除（M1/C11）。
+
+enum fact_status {
+  unknown
+  unverified
+  confirmed
+}
+
+enum lead_priority {
+  high
+  mid
+  low
+}
+
+model Lead {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  // —— 基本信息（PRD §5.3）——
+  name         String        @db.VarChar(128)
+  city         String?       @db.VarChar(64)
+  industry     String?       @db.VarChar(64)
+  mainCategory String?       @map("main_category") @db.VarChar(128)
+  contactName  String?       @map("contact_name") @db.VarChar(64)
+  contactTitle String?       @map("contact_title") @db.VarChar(64)
+  contactPhone String?       @map("contact_phone") @db.VarChar(32)
+  source       String?       @db.VarChar(64)
+  salesTeamSize Int?         @map("sales_team_size")
+  revenueRange String?       @map("revenue_range") @db.VarChar(64)
+  salesMode    String?       @map("sales_mode") @db.VarChar(64)
+  // —— 系统情况 ——
+  currentSystem        String?    @map("current_system") @db.VarChar(128)
+  systemModules        String?    @map("system_modules") @db.VarChar(255)
+  contractExpiry       DateTime?  @map("contract_expiry") @db.Date
+  knownPains           String?    @map("known_pains") @db.Text
+  consideringSwitch    Boolean?   @map("considering_switch")
+  // —— 采购情况 ——
+  hasClearDemand       Boolean?   @map("has_clear_demand")
+  purchaseTime         String?    @map("purchase_time") @db.VarChar(64)
+  budget               String?    @db.VarChar(64)
+  decisionMaker        String?    @map("decision_maker") @db.VarChar(128)
+  decisionProcess      String?    @map("decision_process") @db.VarChar(255)
+  mainConcerns         String?    @map("main_concerns") @db.Text
+  // —— 核实状态（未知/待核实/已确认，§4.3 四个关键事实字段）——
+  currentSystemStatus  fact_status @default(unknown) @map("current_system_status")
+  contractExpiryStatus fact_status @default(unknown) @map("contract_expiry_status")
+  purchaseTimeStatus   fact_status @default(unknown) @map("purchase_time_status")
+  decisionMakerStatus  fact_status @default(unknown) @map("decision_maker_status")
+  // —— 管理组 ——
+  stageId       String         @map("stage_id") @db.Uuid
+  priority      lead_priority  @default(mid)
+  ownerId       String         @map("owner_id") @db.Uuid
+  lastContactAt DateTime?      @map("last_contact_at") @db.Timestamptz(6)
+  nextContactAt DateTime?      @map("next_contact_at") @db.Timestamptz(6)
+  remark        String?        @db.Text
+  customValues  Json?          @map("custom_values") @db.JsonB
+  dataVersion   Int            @default(1) @map("data_version")
+  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  stage  LeadStage  @relation(fields: [stageId], references: [id])
+  events LeadEvent[]
+
+  @@index([ownerId, deletedAt, stageId])
+  @@index([ownerId, nextContactAt])
+  @@index([stageId])
+  @@map("leads")
+}
+
+// ---------- 线索事件（T03，实施计划 §4.2） ----------
+// 阶段变更必须记录前后状态、时间、操作人（PRD §5.8）。
+// stage_snapshot 保存变更当时的阶段编码/名称（含语义锚点），
+// 阶段改名/改码后历史事件仍按当时快照可读，指标口径锚定 semanticKey 不受影响（K2/C02）。
+// 事件表只追加、不修改、不删除；occurred_at 即业务发生时间。
+
+enum lead_event_type {
+  created
+  imported
+  updated
+  stage_changed
+  deleted
+}
+
+model LeadEvent {
+  id            String         @id @default(uuid(7)) @db.Uuid
+  leadId        String         @map("lead_id") @db.Uuid
+  actorId       String?        @map("actor_id") @db.Uuid
+  eventType     lead_event_type @map("event_type")
+  fromStageId   String?        @map("from_stage_id") @db.Uuid
+  toStageId     String?        @map("to_stage_id") @db.Uuid
+  stageSnapshot Json?          @map("stage_snapshot") @db.JsonB
+  detail        Json?          @db.JsonB
+  occurredAt    DateTime       @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  lead Lead @relation(fields: [leadId], references: [id])
+
+  @@index([leadId, occurredAt])
+  @@map("lead_events")
 }

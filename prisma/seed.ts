@@ -2,18 +2,46 @@ import "dotenv/config";
 import { hash } from "@node-rs/argon2";
 import { PrismaClient } from "@prisma/client";
 import { PRESET_STAGES } from "../src/lib/stages";
+import { BUILTIN_LEAD_FIELDS } from "../src/lib/lead-fields";
 
 // Algorithm.Argon2id 的值（库的 ambient const enum 在 isolatedModules 下不可引用成员）
 const ARGON2ID = 2;
 
 /**
- * 基础数据 seed（T01）：13 个预置阶段 + 初始管理员账号。
+ * 基础数据 seed（T01：阶段 + 管理员；T03：内置字段定义）。
  *
  * 幂等策略：只做"缺则补建"，绝不覆盖已有数据——
- * 容器每次启动都会执行本脚本，管理员此后对阶段的改名/改码/排序/启停
- * 与对账号的修改必须原样保留（实施计划 K2、M5）。
+ * 容器每次启动都会执行本脚本，管理员此后对阶段的改名/改码/排序/启停、
+ * 对字段定义的启停/改名以及对账号的修改必须原样保留（实施计划 K2、M4、M5）。
  */
 const prisma = new PrismaClient();
+
+async function seedBuiltinFieldDefs(): Promise<void> {
+  let created = 0;
+  for (const [index, field] of BUILTIN_LEAD_FIELDS.entries()) {
+    const existing = await prisma.leadFieldDef.findUnique({
+      where: { key: field.key },
+      select: { id: true },
+    });
+    if (existing) {
+      continue;
+    }
+    await prisma.leadFieldDef.create({
+      data: {
+        key: field.key,
+        label: field.label,
+        type: field.type,
+        isBuiltin: true,
+        isActive: true,
+        sortOrder: index + 1,
+      },
+    });
+    created += 1;
+  }
+  console.log(
+    `[seed] 内置字段定义就绪：共 ${BUILTIN_LEAD_FIELDS.length} 个，本次新建 ${created} 个。`,
+  );
+}
 
 async function seedStages(): Promise<void> {
   let created = 0;
@@ -84,6 +112,7 @@ async function seedAdmin(): Promise<void> {
 
 async function main(): Promise<void> {
   await seedStages();
+  await seedBuiltinFieldDefs();
   await seedAdmin();
 }
 
