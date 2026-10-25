@@ -10,6 +10,7 @@ import { prisma } from "@/server/db";
 const createdUserIds: string[] = [];
 const createdStageIds: string[] = [];
 const createdFieldDefIds: string[] = [];
+const createdModelConfigIds: string[] = [];
 
 /** 登记经服务层创建、需随清理回收的测试阶段/字段定义 */
 export function registerTestStage(id: string): void {
@@ -18,6 +19,11 @@ export function registerTestStage(id: string): void {
 
 export function registerTestFieldDef(id: string): void {
   createdFieldDefIds.push(id);
+}
+
+/** 登记测试创建的模型配置（全局数据，清理时统一回收；T08） */
+export function registerTestModelConfig(id: string): void {
+  createdModelConfigIds.push(id);
 }
 
 export interface TestUser extends AuthUser {
@@ -128,11 +134,20 @@ export async function cleanupTestUsers(): Promise<void> {
     });
     const leadIds = leads.map((lead) => lead.id);
     if (leadIds.length > 0) {
+      // ai_runs 引用线索（RESTRICT），先于线索删除（T08）
+      await prisma.aiRun.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.task.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.leadEvent.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.interaction.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.lead.deleteMany({ where: { id: { in: leadIds } } });
     }
+  }
+  // 1.5) 测试创建的模型配置（此时 ai_runs 已删，无 FK 引用）
+  if (createdModelConfigIds.length > 0) {
+    await prisma.modelConfig.deleteMany({
+      where: { id: { in: createdModelConfigIds } },
+    });
+    createdModelConfigIds.length = 0;
   }
   // 2) 自定义字段定义（此时已无引用）
   if (createdFieldDefIds.length > 0) {

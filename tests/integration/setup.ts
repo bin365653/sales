@@ -7,3 +7,8 @@ if (!process.env.DATABASE_URL) {
     "集成测试需要 DATABASE_URL：请先启动本地 PostgreSQL 并复制 .env.example 为 .env",
   );
 }
+
+// T08：模型密钥加密需要主密钥；缺省时注入确定性测试密钥（64 hex = 32 字节）。
+// 已配置环境（本机 .env / CI secrets）原样使用，验证真实配置链路。
+process.env.APP_ENCRYPTION_KEY ??=
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

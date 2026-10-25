@@ -199,6 +199,7 @@ model Lead {
   events       LeadEvent[]
   interactions Interaction[]
   tasks        Task[]
+  aiRuns       AiRun[]
 
   @@index([ownerId, deletedAt, stageId])
   @@index([ownerId, nextContactAt])
@@ -418,4 +419,112 @@ model Task {
   @@index([assigneeId, status, dueAt])
   @@index([leadId, status, dueAt])
   @@map("tasks")
+}
+
+// ---------- AI 基础设施（T08，实施计划 §4.2 / §7 / PRD §6） ----------
+// 模型配置：密钥 AES-256-GCM 密文落库（主密钥来自环境变量 APP_ENCRYPTION_KEY，
+// 不进 Git、不进备份，§8.3）；任何 API 只返回 key_last4 与"已配置"，绝不回显明文。
+// 多条配置 + 单条激活（is_active）实现"换 provider 仅改配置"（C05）。
+
+model ModelConfig {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  provider     String   @db.VarChar(64)
+  baseUrl      String   @map("base_url") @db.VarChar(255)
+  modelName    String   @map("model_name") @db.VarChar(128)
+  apiKeyCipher String   @map("api_key_cipher") @db.VarChar(512)
+  keyLast4     String   @map("key_last4") @db.VarChar(4)
+  timeoutMs    Int      @default(30000) @map("timeout_ms")
+  maxRetries   Int      @default(1) @map("max_retries")
+  isActive     Boolean  @default(false) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  runs AiRun[]
+
+  @@map("model_configs")
+}
+
+// 提示词模板与版本：版本只增不改（不可变、可追溯，ai_runs 记录具体版本，
+// 历史可复现）。每种 run_type 恰好一个模板（Registry 按 run_type 唯一定位），
+// 模板内 version 递增，"启用"即取最高版本。
+model PromptTemplate {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  name      String   @db.VarChar(64)
+  runType   ai_run_type @map("run_type")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  versions PromptVersion[]
+
+  @@unique([runType])
+  @@map("prompt_templates")
+}
+
+model PromptVersion {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  templateId   String   @map("template_id") @db.Uuid
+  version      Int
+  content      String   @db.Text
+  outputSchema Json?    @map("output_schema") @db.JsonB
+  createdBy    String   @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  template PromptTemplate @relation(fields: [templateId], references: [id])
+  runs     AiRun[]
+
+  @@unique([templateId, version])
+  @@map("prompt_versions")
+}
+
+// 每次调用全量留痕（PRD §5.5/§6.8）：输入快照（白名单字段，无联系方式/密钥）+
+// data_version + 输出经校验后才写入 output + 状态/耗时/错误类型。
+// status=pending 创建后异步执行（§7.2 单机异步 + 前端轮询，接口预留 status 平滑换队列）。
+enum ai_run_type {
+  analysis
+  call_prep
+  interaction_summary
+}
+
+enum ai_run_status {
+  pending
+  success
+  failed
+  timeout
+  invalid_output
+}
+
+enum ai_error_type {
+  timeout
+  auth
+  rate_limit
+  provider
+  invalid_output
+}
+
+model AiRun {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  leadId           String        @map("lead_id") @db.Uuid
+  userId           String        @map("user_id") @db.Uuid
+  runType          ai_run_type   @map("run_type")
+  modelConfigId    String        @map("model_config_id") @db.Uuid
+  promptVersionId  String        @map("prompt_version_id") @db.Uuid
+  inputSnapshot    Json          @map("input_snapshot") @db.JsonB
+  inputDataVersion Int           @map("input_data_version")
+  output           Json?
+  status           ai_run_status @default(pending)
+  errorType        ai_error_type? @map("error_type")
+  errorMessage     String?       @map("error_message") @db.VarChar(512)
+  durationMs       Int?          @map("duration_ms")
+  retryOfId        String?       @map("retry_of_id") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  lead          Lead           @relation(fields: [leadId], references: [id])
+  modelConfig   ModelConfig    @relation(fields: [modelConfigId], references: [id])
+  promptVersion PromptVersion  @relation(fields: [promptVersionId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@index([userId, createdAt])
+  @@map("ai_runs")
 }

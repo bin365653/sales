@@ -36,6 +36,10 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-qince-admin-2026}
       ADMIN_NAME: ${ADMIN_NAME:-管理员}
+      # T08：模型密钥加密主密钥（AES-256-GCM，64 位 hex）与每日 AI 上限；
+      # 未配置主密钥时容器可启动，但保存模型配置会报错（README「AI 基础设施」）
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-50}
       NODE_ENV: production
     ports:
       - "3000:3000"

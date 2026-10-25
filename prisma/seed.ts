@@ -3,6 +3,7 @@ import { hash } from "@node-rs/argon2";
 import { PrismaClient } from "@prisma/client";
 import { PRESET_STAGES } from "../src/lib/stages";
 import { BUILTIN_LEAD_FIELDS } from "../src/lib/lead-fields";
+import { PROMPT_TEMPLATE_SEEDS } from "../src/server/ai/prompts";
 
 // Algorithm.Argon2id 的值（库的 ambient const enum 在 isolatedModules 下不可引用成员）
 const ARGON2ID = 2;
@@ -110,10 +111,57 @@ async function seedAdmin(): Promise<void> {
   console.log(`[seed] 初始管理员已创建：${username}（Argon2id）`);
 }
 
+/**
+ * AI 提示词模板 seed（T08，实施计划 §7.3 交付物）：
+ * 每个 run_type 一个模板 + v1 基线版本，源自 src/server/ai/prompts/ 注册表。
+ * 幂等：模板缺则建；已有模板绝不改动（版本只增不改，管理员此后新建的版本原样保留）。
+ */
+async function seedPromptTemplates(): Promise<void> {
+  const admin = await prisma.user.findFirst({
+    where: { role: "admin" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (!admin) {
+    console.warn("[seed] 无管理员账号，跳过提示词模板 seed。");
+    return;
+  }
+  let created = 0;
+  for (const seedItem of PROMPT_TEMPLATE_SEEDS) {
+    const template = await prisma.promptTemplate.findUnique({
+      where: { runType: seedItem.runType },
+      select: { id: true },
+    });
+    if (template) {
+      continue;
+    }
+    await prisma.promptTemplate.create({
+      data: {
+        name: seedItem.name,
+        runType: seedItem.runType,
+        isActive: true,
+        versions: {
+          create: {
+            version: 1,
+            content: seedItem.content,
+            outputSchema: seedItem.outputSchema as object,
+            createdBy: admin.id,
+          },
+        },
+      },
+    });
+    created += 1;
+  }
+  console.log(
+    `[seed] AI 提示词模板就绪：共 ${PROMPT_TEMPLATE_SEEDS.length} 类，本次新建 ${created} 个。`,
+  );
+}
+
 async function main(): Promise<void> {
   await seedStages();
   await seedBuiltinFieldDefs();
   await seedAdmin();
+  await seedPromptTemplates();
 }
 
 main()

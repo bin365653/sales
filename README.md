@@ -221,6 +221,94 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   `tests/integration/tasks.test.ts`（19 例：视图跨日、事务闭环、回滚对账、
   越权 404、沟通建任务同事务回滚）；生产构建冒烟 21 项全通过。
 
+## AI 基础设施（T08 交付）
+
+- **数据模型**（迁移 `*_t08_ai_infra`）：`model_configs`（provider/base_url/模型名/
+  超时/重试/单激活）、`prompt_templates` + `prompt_versions`（版本只增不改，
+  `ai_runs.prompt_version_id` 记录具体版本、历史可复现）、`ai_runs`（每次调用全量
+  留痕：输入快照 + data_version + 状态/耗时/错误类型，PRD §5.5/§6.8）。
+- **密钥安全（验收项：密钥不回显不入日志）**：API 密钥仅在设置接口提交一次，
+  AES-256-GCM 加密落库（`model_configs.api_key_cipher`），主密钥来自环境变量
+  `APP_ENCRYPTION_KEY`（64 位 hex，不进 Git/备份；丢失只影响密钥配置可重录）；
+  任何接口只返回 `key_last4` 与 `hasKey`，明文/密文不出现在响应、审计
+  （`ai.model_config_created/updated`）与错误信息中。解密仅存在于单次调用内存。
+- **Provider Adapter（`src/server/ai/provider.ts`）**：OpenAI 兼容
+  `/chat/completions` 单实现适配多服务商——换 provider 仅改配置（C05）。
+  错误五分类 `timeout/auth/rate_limit/provider/invalid_output`：超时（AbortSignal）
+  → timeout、401/403 → auth、429 → rate_limit、其余 HTTP/网络错误 → provider；
+  网络类错误（timeout/provider）按 `max_retries`（默认 1）重试，auth/rate_limit 不重试。
+- **Output Validator（`src/server/ai/validator.ts`）**：Zod 固化三种输出结构——
+  `analysis`（PRD §5.4 八项：匹配度/事实(facts.status 区分已知与待核实)/痛点≤3+依据/
+  切入点/下一步/待核实问题）、`call_prep`（PRD §5.5 六项：目标/开场/3 诊断问题/
+  2 异议应对/确认动作/避免表述）、`interaction_summary`（T10 摘要草稿）。
+  宽容解析（去 Markdown 围栏）；结构非法带纠错指令自动重试 1 次，仍失败落
+  `invalid_output` 供重试入口（R2）。
+- **Context Builder（`src/server/ai/context.ts`）**：白名单输入快照（画像+系统情况+
+  采购情况+阶段+最近 5 条沟通+核实状态列），不含联系人电话（PRD §6.9 最小化
+  敏感信息）；快照整体落 `ai_runs.input_snapshot`。
+- **提示词基线（交付物，`src/server/ai/prompts/`）**：三份中文系统提示词
+  （含反幻觉红线："仅使用输入资料；禁止推测营收/人数/在用系统/到期时间；
+  事实与推断分离；信息不足输出 unknown"），经 seed 幂等建为模板 + v1 版本；
+  运行时一律经 Prompt Registry 读库，业务代码零硬编码提示词（§5.11）。
+- **执行模型（§7.2）**：`POST /api/ai/runs` 权限（线索写范围）→ 每日频控
+  （发起即计数，`AI_DAILY_LIMIT` 默认 50 次/人，超限 429 `ai_daily_limit`）→
+  配置/提示词就绪校验（无启用配置 409 `ai_not_configured`）→ 落
+  `ai_runs(pending)` 立即返回 run_id，后端异步执行，前端轮询
+  `GET /api/ai/runs/:id`；AI 输出只写 `ai_runs.output`，不触发任何业务表（K3）。
+- **重试与历史**：`POST /api/ai/runs/:id/retry` 仅失败/超时/格式异常可重试，
+  重试 = 新 run（`retry_of_id` 留痕，快照按当前数据重建）；历史
+  `GET /api/leads/:id/ai-runs` 倒序全量留痕；越权一律 404。
+- **个人全量导出并入**（M9）：ZIP 新增 `AI记录.csv`（发起时间/类型/服务商/模型/
+  提示词版本/状态/错误/耗时/数据版本——只含状态元数据，快照与输出全文不进导出）。
+- **真实服务商联调说明**：T08 验收（错误分类/invalid_output/换 provider/密钥安全）
+  由自动化测试经注入 fetch 全覆盖；真实模型调用待 C15 首个服务商 base_url+key
+  提供后，在 T09 面板联调时验证。
+- **验收锚点**：`tests/unit/ai-crypto.test.ts`（6 例）、`ai-provider.test.ts`
+  （9 例：错误分类与重试）、`ai-validator.test.ts`（15 例）、`ai-context.test.ts`
+  （4 例：白名单无电话）、`ai-schemas.test.ts`（7 例）+
+  `tests/integration/ai-model-configs.test.ts`（7 例：密钥不回显/单激活/审计）、
+  `ai-runs.test.ts`（16 例：错误分类/自动纠错重试/invalid_output/换配置/频控 429/
+  越权 404/retry 留痕/导出并入）；生产 HTTP 冒烟 19 项（401/密钥不回显/
+  failed+provider 分类/轮询终态/重试/用量字段）全通过。
+
+## 最小闭环验收（T01–T07）
+
+三层验证，从快到慢依次执行：
+
+```bash
+npm run test                # ① 单元测试（207 例，无需数据库）
+npm run test:integration    # ② 集成测试（121 例，需 PostgreSQL，见上文启动方式）
+npm run test:smoke          # ③ 最小闭环 E2E 冒烟（需先启动应用）
+```
+
+③ 的冒烟脚本 `tests/e2e/minimal-loop.cjs` 走 HTTP 层黑盒验证完整业务闭环（50 项断言，
+自动清理冒烟数据，可重复执行）：健康检查 → 未登录重定向/登录/登出失效 → 新建线索
+（校验拒绝/阶段流转/dataVersion 409）→ 线索池筛选分页/详情页/批量修改（白名单拒绝）→
+导入模板下载/CSV 上传/重复检出/行级校验/确认入库/批次终态 → 列表导出 XLSX 下载 →
+沟通保存 + K4 自动推进 qualified + 修正留痕 → 任务今日/逾期视图 → 完成任务弹窗
+（done + completed_at + 沟通记录 + 下一任务同事务）→ 重复完成拒绝 → 取消任务 →
+个人全量导出 ZIP。前置：应用已启动且数据库已迁移 + seed。
+
+```bash
+npm run start               # 先启动生产服务（或 npm run dev）
+npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMOKE_PASSWORD 可覆盖默认值
+```
+
+**手工 UI 验收路径**（浏览器走一遍，验证页面交互与脚本的 API 行为一致）：
+
+1. 打开 `http://localhost:3000` → 自动跳转 `/login`，用管理员账号登录（本地默认
+   `admin`，密码见 `.env` 的 `ADMIN_PASSWORD`）。
+2. 线索池 `/leads`：新建客户（仅填名称即可保存成功）→ 搜索/组合筛选/翻页 →
+   进入详情页。
+3. 详情页：编辑画像字段 → 阶段流转（换浏览器标签同时提交可看到 409 提示刷新）→
+   添加沟通记录，勾选"形成合格线索"→ 阶段自动推进并出现 stage_changed 时间线条目。
+4. 任务中心 `/tasks`：新建任务（截止时间选昨天）→ 今日视图出现该任务且标红逾期 →
+   点"完成"填沟通结果并创建下一任务 → 任务变为已完成且显示完成时间与沟通记录链接。
+5. 线索池导入：下载模板 → 填 1 行有效 + 1 行错误数据 → 上传/映射/预览确认 →
+   结果汇总与线索池核对。
+6. 线索池导出与个人全量导出：下载 XLSX/ZIP 核对内容与公式转义。
+7. 右上角登出 → 再访问任意页面回到登录页。
+
 ## 常用命令
 
 | 命令 | 说明 |
@@ -230,6 +318,7 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
 | `npm run lint` / `npm run typecheck` | ESLint / TypeScript 检查 |
 | `npm run test` | Vitest 单元测试（无需数据库） |
 | `npm run test:integration` | 集成测试（需先启动 PostgreSQL，见上） |
+| `npm run test:smoke` | 最小闭环 E2E 冒烟（需先启动应用，见「最小闭环验收」） |
 | `npm run test:all` | 单元 + 集成 |
 | `npm run db:migrate` | 创建并应用开发迁移（prisma migrate dev） |
 | `npm run db:deploy` | 应用已版本化的迁移（部署用，幂等） |
