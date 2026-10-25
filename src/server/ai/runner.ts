@@ -4,7 +4,7 @@ import { ApiError } from "@/server/http/api";
 import { AuthUser } from "@/lib/auth";
 import { AiRunCreateInput } from "@/lib/schemas/ai";
 import { assertLeadReadable, assertLeadWritable } from "@/server/permissions";
-import { buildAiInput } from "./context";
+import { buildAiInput, extractRawNotes, RAW_INTERACTION_NOTES_KEY } from "./context";
 import { decryptApiKey } from "./crypto";
 import { assertAiAllowedForLead } from "./guard";
 import { getActiveEndpoint } from "./model-configs";
@@ -80,8 +80,12 @@ async function requireRunWithAccess(actor: AuthUser, runId: string) {
   return run;
 }
 
-/** 输入快照：按线索当前数据重建（重试场景同样取最新快照 + data_version） */
-async function snapshotForLead(leadId: string): Promise<{
+/** 输入快照：按线索当前数据重建（重试场景同样取最新快照 + data_version）；
+ * notes（T10，仅 interaction_summary）并入快照留痕，重试按原 notes 取回 */
+async function snapshotForLead(
+  leadId: string,
+  notes?: string,
+): Promise<{
   snapshot: Prisma.InputJsonValue;
   inputDataVersion: number;
 }> {
@@ -97,8 +101,15 @@ async function snapshotForLead(leadId: string): Promise<{
     orderBy: { occurredAt: "desc" },
     take: 5,
   });
+  const snapshot = buildAiInput(lead, interactions);
+  if (notes !== undefined) {
+    snapshot[RAW_INTERACTION_NOTES_KEY] = {
+      note: "销售口述/粘贴的原始沟通内容（未整理，仅供本次摘要任务使用）",
+      content: notes,
+    };
+  }
   return {
-    snapshot: buildAiInput(lead, interactions) as Prisma.InputJsonValue,
+    snapshot: snapshot as Prisma.InputJsonValue,
     inputDataVersion: lead.dataVersion,
   };
 }
@@ -140,7 +151,7 @@ export async function createAiRun(
   const endpoint = await getActiveEndpoint();
   const prompt = await resolveActivePromptVersion(input.runType);
 
-  const { snapshot, inputDataVersion } = await snapshotForLead(lead.id);
+  const { snapshot, inputDataVersion } = await snapshotForLead(lead.id, input.notes);
 
   const run = await prisma.aiRun.create({
     data: {
@@ -288,7 +299,13 @@ export async function retryAiRun(
 
   const endpoint = await getActiveEndpoint();
   const prompt = await resolveActivePromptVersion(previous.runType);
-  const { snapshot, inputDataVersion } = await snapshotForLead(previous.leadId);
+  // 摘要草稿重试（T10）：原始沟通内容取自上一 run 的快照留痕，
+  // 其余数据（画像/最近沟通/data_version）按当前线索重建
+  const notes =
+    previous.runType === "interaction_summary"
+      ? extractRawNotes(previous.inputSnapshot)
+      : undefined;
+  const { snapshot, inputDataVersion } = await snapshotForLead(previous.leadId, notes);
 
   const run = await prisma.aiRun.create({
     data: {

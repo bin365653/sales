@@ -333,13 +333,57 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   生产 HTTP 冒烟 29 项（`.verify/t09-smoke.cjs`：SSR 入口与用量行/空线索 8+6 项/
   insufficient/历史扩展字段/failed 后页面不受影响/重试留痕/409）全通过。
 
+## AI 摘要草稿（T10 交付）
+
+- **范围口径**：`interaction_summary` 的提示词与输出 Schema 已随 T08 交付（seed v1）；
+  本任务交付沟通表单「AI 生成摘要」→ 草稿回填 → 用户确认才保存的完整链路
+  （§7.1 摘要审核流），复用 T09 详情页 AI 面板同一模板（异步/轮询/失败重试/复制/历史）。
+- **原始沟通内容（notes）**：摘要以"销售口述/粘贴的原始沟通内容"为唯一素材——
+  表单内先在「客户实际反馈」粘贴原始内容，点「AI 生成摘要」即以该内容发起 run
+  （`POST /api/ai/runs` 新增 `notes` 入参：仅 interaction_summary 接受且必填，
+  其余类型携带一律 400，防"无料可依"调用）；notes 随快照落
+  `ai_runs.input_snapshot.raw_interaction_notes` 留痕（历史可复现）；
+  重试沿用原 notes、画像/最近沟通等其余数据按当前线索重建。
+- **草稿回填（P5 沟通表单，UIUX §P5）**：run 成功后 `summary` 回填「客户实际反馈」、
+  `next_action` 回填「下一步动作」，两字段旁挂紫虚线"✦ AI 草稿"徽标
+  （UIUX §4.1，与人工输入可区分）；渲染前经与后端同一份 `interactionSummarySchema`
+  校验，结构异常按 invalid_output 文案提示可重试。**未确认不落正式记录**——
+  草稿只存在于表单与 `ai_runs.output`，保存永远由用户点击触发
+  （集成测试固化：run 成功后 interactions 计数不变）。
+- **原始输出与最终记录可区分**：`interactions` 新增 `ai_run_id` 列
+  （迁移 `*_t10_ai_draft`，逻辑引用同 audit_logs，无外键）：确认保存时服务层校验
+  来源 run（本人 + 本线索 + interaction_summary + success，任一不满足 400
+  `invalid_ai_run` 整体拒绝、零部分成功）并登记来源；记录时间线显示
+  "✦ AI 草稿确认"徽标；`ai_runs.output` 原始输出不可变，用户编辑后的最终值可与之
+  比对（集成测试以"编辑后保存 + 两者不同"断言）。修正（PATCH）不接受 aiRunId，
+  来源登记后不可改写。
+- **互斥与轮询（§4.7）**：沟通表单与详情页 AI 面板经 `aiPending`/`onPendingChange`
+  双向联动——任一处存在 pending run 时其余 AI 入口禁用（防并发重复调用）；
+  表单侧 2s 轮询上限 90 次，超限提示到「AI 历史」查看；表单关闭/保存成功时停止
+  本侧轮询并复位互斥状态，服务端 run 继续执行且留痕。
+- **面板与复制（同一模板）**：AI 面板历史/详情支持 interaction_summary 只读展示
+  （两项分区 + "草稿仅作回填参考"说明），历史区顶部展示三类 run 的启用提示词
+  版本号；摘要 run 不提供面板侧"重新生成"（需携带 notes，统一从表单发起），
+  失败仍可重试（新 run 留痕）；复制格式 `formatInteractionSummaryCopy` 纯文本
+  两项 + 草稿边界说明 + 合规脚注；`formatAiRunCopy` 分发前先经 Zod 校验
+  （结构异常返回 null 提示复制失败，不渲染 "undefined"）。
+- **输出上限对齐落库列**：`interactionSummarySchema.next_action` 上限 500→255
+  （对齐 `interactions.next_action` VARCHAR(255)），超限走纠错重试而非回填后被表单拒绝。
+- **验收锚点**：`tests/unit/ai-schemas.test.ts`（notes 必填/禁带）、`ai-copy.test.ts`
+  （草稿格式 + 分发防御）、`ai-validator.test.ts`（255 边界）、
+  `interaction-schemas.test.ts`（aiRunId 可选携带/修正剥离）+
+  `tests/integration/ai-draft.test.ts`（7 例：快照留痕/未确认不落库/重试沿用 notes/
+  来源校验四态 400/越权 404/编辑值与原始输出可区分）；
+  生产 HTTP 冒烟 31 项（`.verify/t10-smoke.cjs`：入参规则/快照留痕/未确认不落库/
+  invalid_ai_run/确认保存/SSR 徽标/历史版本号）全通过。
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
 
 ```bash
-npm run test                # ① 单元测试（214 例，无需数据库）
-npm run test:integration    # ② 集成测试（126 例，需 PostgreSQL，见上文启动方式）
+npm run test                # ① 单元测试（219 例，无需数据库）
+npm run test:integration    # ② 集成测试（133 例，需 PostgreSQL，见上文启动方式）
 npm run test:smoke          # ③ 最小闭环 E2E 冒烟（需先启动应用）
 ```
 
@@ -363,7 +407,9 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
 2. 线索池 `/leads`：新建客户（仅填名称即可保存成功）→ 搜索/组合筛选/翻页 →
    进入详情页。
 3. 详情页：编辑画像字段 → 阶段流转（换浏览器标签同时提交可看到 409 提示刷新）→
-   添加沟通记录，勾选"形成合格线索"→ 阶段自动推进并出现 stage_changed 时间线条目。
+   添加沟通记录，勾选"形成合格线索"→ 阶段自动推进并出现 stage_changed 时间线条目；
+   T10：先在「客户实际反馈」粘贴一段原始沟通内容 → 点「AI 生成摘要」→ 草稿回填
+   （紫虚线"AI 草稿"徽标）→ 修改确认后保存 → 时间线记录显示"✦ AI 草稿确认"。
 4. 任务中心 `/tasks`：新建任务（截止时间选昨天）→ 今日视图出现该任务且标红逾期 →
    点"完成"填沟通结果并创建下一任务 → 任务变为已完成且显示完成时间与沟通记录链接。
 5. 详情页 AI 面板：先在设置接口建一条启用模型配置（或临时指向不可达地址观察

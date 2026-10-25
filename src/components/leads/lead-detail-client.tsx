@@ -119,6 +119,9 @@ export function LeadDetailClient({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // AI 发起互斥（T10，UIUX §4.7）：详情页 AI 面板与沟通表单「AI 生成摘要」
+  // 任一处存在 pending run 时，其余 AI 入口禁用（防并发重复调用）
+  const [aiRunInFlight, setAiRunInFlight] = useState(false);
 
   async function transitionStage(): Promise<void> {
     if (targetStageId === "" || busy) {
@@ -407,7 +410,7 @@ export function LeadDetailClient({
             </ol>
           </section>
 
-          {/* 沟通记录（T06 交付） */}
+          {/* 沟通记录（T06 交付；T10 起表单含「AI 生成摘要」草稿回填） */}
           <InteractionsPanel
             leadId={lead.id}
             leadName={lead.name}
@@ -415,6 +418,8 @@ export function LeadDetailClient({
             currentStageSortOrder={currentStageSortOrder}
             stages={stageOptions}
             interactions={interactions}
+            aiPending={aiRunInFlight}
+            onAiPendingChange={setAiRunInFlight}
           />
           {/* 任务区块（T07 交付）：待处理在前，完成弹窗=沟通结果+下一任务单事务 */}
           <TasksPanel
@@ -424,13 +429,15 @@ export function LeadDetailClient({
             tasks={tasks}
           />
           {/* AI 面板（T09 交付）：异步/轮询/失败重试/复制/历史；错误边界内，
-              AI 异常只影响面板自身（验收项） */}
+              AI 异常只影响面板自身（验收项）；与沟通表单摘要发起互斥（T10） */}
           <AiPanelSection
             leadId={lead.id}
             leadName={lead.name}
             initialRuns={aiRuns}
             initialUsage={aiUsage}
             activePromptVersions={activePromptVersions}
+            externalPending={aiRunInFlight}
+            onPendingChange={setAiRunInFlight}
           />
         </>
       )}

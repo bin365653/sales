@@ -99,6 +99,13 @@ describe("interaction_summary 结构校验", () => {
       false,
     );
   });
+
+  it("next_action 超过 255 字被拒绝（对齐落库列 interactions.next_action，T10）", () => {
+    const long = { summary: "反馈", next_action: "长".repeat(256) };
+    expect(validateOutput("interaction_summary", JSON.stringify(long)).ok).toBe(false);
+    const atLimit = { summary: "反馈", next_action: "短".repeat(255) };
+    expect(validateOutput("interaction_summary", JSON.stringify(atLimit)).ok).toBe(true);
+  });
 });
 
 describe("失败路径与宽容解析", () => {

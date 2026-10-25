@@ -9,6 +9,26 @@ import { Interaction, Lead, LeadStage } from "@prisma/client";
 /** 最近沟通条数（快照摘要窗口） */
 const RECENT_INTERACTIONS_LIMIT = 5;
 
+/**
+ * interaction_summary（T10）专用快照键：销售口述/粘贴的原始沟通内容。
+ * 随快照落 ai_runs.input_snapshot 留痕（历史可复现）；重试按同键取回
+ * （见 runner.extractRawNotes），保证重试任务口径一致。
+ */
+export const RAW_INTERACTION_NOTES_KEY = "raw_interaction_notes";
+
+/** 从快照中取回原始沟通内容（无则 undefined；analysis/call_prep 快照无此键） */
+export function extractRawNotes(snapshot: unknown): string | undefined {
+  if (typeof snapshot !== "object" || snapshot === null) {
+    return undefined;
+  }
+  const entry = (snapshot as Record<string, unknown>)[RAW_INTERACTION_NOTES_KEY];
+  if (typeof entry !== "object" || entry === null) {
+    return undefined;
+  }
+  const content = (entry as { content?: unknown }).content;
+  return typeof content === "string" ? content : undefined;
+}
+
 type InteractionForSnapshot = Pick<
   Interaction,
   | "occurredAt"

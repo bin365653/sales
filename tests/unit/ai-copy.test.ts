@@ -3,11 +3,17 @@ import {
   formatAiRunCopy,
   formatAnalysisCopy,
   formatCallPrepCopy,
+  formatInteractionSummaryCopy,
 } from "@/lib/ai-copy";
-import type { AnalysisOutput, CallPrepOutput } from "@/server/ai/validator";
+import type {
+  AnalysisOutput,
+  CallPrepOutput,
+  InteractionSummaryOutput,
+} from "@/server/ai/validator";
 
-// T09 复制格式单测（UIUX §4.10）：复制一律产出纯文本、分节排版、末尾常驻
-// "AI 生成，仅供参考"标识；分析 8 项 / 准备卡 6 项齐全；信息不足如实呈现。
+// T09/T10 复制格式单测（UIUX §4.10）：复制一律产出纯文本、分节排版、末尾常驻
+// "AI 生成，仅供参考"标识；分析 8 项 / 准备卡 6 项 / 摘要草稿 2 项齐全；
+// 信息不足如实呈现；草稿明确标注"未确认不落正式记录"。
 
 const ANALYSIS: AnalysisOutput = {
   fit: { level: "mid", reason: "行业与规模基本匹配" },
@@ -89,10 +95,38 @@ describe("formatCallPrepCopy（AI 电话准备卡）", () => {
   });
 });
 
+const SUMMARY_DRAFT: InteractionSummaryOutput = {
+  summary: "客户反馈现有系统操作繁琐，数据靠手工导出；对报价感兴趣但需要老板确认。",
+  next_action: "发送产品资料并约定下周与老板一起演示",
+};
+
+describe("formatInteractionSummaryCopy（AI 沟通摘要草稿，T10）", () => {
+  it("含标题行、两项分节、草稿边界说明与合规脚注", () => {
+    const text = formatInteractionSummaryCopy(
+      "合肥XX商贸",
+      "2026-10-26 10:00",
+      SUMMARY_DRAFT,
+    );
+    expect(text).toContain("【AI 沟通摘要草稿】客户:合肥XX商贸  生成时间:2026-10-26 10:00");
+    expect(text).toContain("■ 客户实际反馈（草稿）");
+    expect(text).toContain(SUMMARY_DRAFT.summary);
+    expect(text).toContain("■ 下一步动作（草稿）");
+    expect(text).toContain(SUMMARY_DRAFT.next_action);
+    expect(text).toContain("经你修改确认保存后才形成正式沟通记录");
+    expect(text).toContain("(AI 生成,仅供参考,请核对后使用)");
+    // 纯文本：不带 Markdown 符号
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("```");
+  });
+});
+
 describe("formatAiRunCopy（分发与防御）", () => {
   it("按 run 类型分发", () => {
     expect(formatAiRunCopy("analysis", "客户", "t", ANALYSIS)).toContain("AI 客户分析");
     expect(formatAiRunCopy("call_prep", "客户", "t", CALL_PREP)).toContain("AI 电话准备卡");
+    expect(
+      formatAiRunCopy("interaction_summary", "客户", "t", SUMMARY_DRAFT),
+    ).toContain("AI 沟通摘要草稿");
   });
 
   it("输出缺失/结构损坏/未知类型返回 null（不抛错）", () => {
@@ -102,5 +136,8 @@ describe("formatAiRunCopy（分发与防御）", () => {
       formatAiRunCopy("analysis", "客户", "t", { fit: { level: "high" } }),
     ).toBeNull();
     expect(formatAiRunCopy("interaction_summary", "客户", "t", {})).toBeNull();
+    expect(
+      formatAiRunCopy("interaction_summary", "客户", "t", { summary: "只有一项" }),
+    ).toBeNull();
   });
 });

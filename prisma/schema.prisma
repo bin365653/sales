@@ -363,6 +363,10 @@ model Interaction {
   nextContactAt          DateTime?             @map("next_contact_at") @db.Timestamptz(6)
   isQualified            Boolean               @default(false) @map("is_qualified")
   demoBooked             Boolean               @default(false) @map("demo_booked")
+  // —— AI 摘要草稿来源（T10，§7.1 摘要审核流）：保存时人工确认的草稿 run ——
+  // 逻辑引用（同 audit_logs，不加外键）；AI 输出本身只存 ai_runs.output（K3），
+  // 本列仅记录"该记录确认自哪个草稿"，使原始输出与最终记录可区分、可追溯。
+  aiRunId                String?               @map("ai_run_id") @db.Uuid
   // —— 修正审计（M11）：追加式数组，不覆盖历史条目 ——
   editAudit              Json?                 @map("edit_audit") @db.JsonB
   createdAt              DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)

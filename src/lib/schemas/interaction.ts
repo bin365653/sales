@@ -133,13 +133,21 @@ const effectiveRequiresConnected = (
   value: { effective: boolean; connected: boolean },
 ) => !value.effective || value.connected;
 
-export const interactionCreateSchema = baseInteractionFields.refine(
-  effectiveRequiresConnected,
-  {
+/** AI 草稿来源 run（T10）：仅新建可携带；服务层校验归属/类型/状态后落库 */
+const aiRunIdSchema = z
+  .string()
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    "AI 草稿来源标识不合法",
+  )
+  .optional();
+
+export const interactionCreateSchema = baseInteractionFields
+  .extend({ aiRunId: aiRunIdSchema })
+  .refine(effectiveRequiresConnected, {
     message: "未接通的沟通不能标记为有效沟通",
     path: ["effective"],
-  },
-);
+  });
 
 // 修正（M11）：同一套字段校验；不含"本次确认"标记（一次性动作，不在修正中重复触发）。
 export const interactionUpdateSchema = baseInteractionFields

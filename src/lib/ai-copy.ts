@@ -1,9 +1,17 @@
-import type { AnalysisOutput, CallPrepOutput } from "@/server/ai/validator";
+import {
+  analysisSchema,
+  callPrepSchema,
+  interactionSummarySchema,
+  type AnalysisOutput,
+  type CallPrepOutput,
+  type InteractionSummaryOutput,
+} from "@/server/ai/validator";
 import type { RunTypeValue } from "@/lib/schemas/ai";
 
-// AI 输出复制格式（T09，UIUX §4.10）：复制一律产出纯文本（不带 Markdown 符号），
-// 分节排版，末尾常驻"AI 生成，仅供参考"标识。分析（PRD §5.4 八项）与
-// 准备卡（PRD §5.5 六项）各一份格式；纯函数，单测固化（UIUX §7.2 合规文案）。
+// AI 输出复制格式（T09/T10，UIUX §4.10）：复制一律产出纯文本（不带 Markdown 符号），
+// 分节排版，末尾常驻"AI 生成，仅供参考"标识。分析（PRD §5.4 八项）、
+// 准备卡（PRD §5.5 六项）与沟通摘要草稿（T10）各一份格式；
+// 纯函数，单测固化（UIUX §7.2 合规文案）。
 
 const FIT_LEVEL_LABELS: Record<string, string> = {
   high: "高",
@@ -75,7 +83,23 @@ export function formatCallPrepCopy(
   return `${sections.join("\n\n")}\n${COPY_FOOTER}`;
 }
 
-/** 按 run 类型分发；输出结构未知（历史脏数据等）返回 null，调用方提示复制失败 */
+/** T10 摘要草稿：标注"草稿"字样，提示以确认保存后的正式记录为准 */
+export function formatInteractionSummaryCopy(
+  leadName: string,
+  generatedAtDisplay: string,
+  output: InteractionSummaryOutput,
+): string {
+  const sections: string[] = [
+    `【AI 沟通摘要草稿】客户:${leadName}  生成时间:${generatedAtDisplay}`,
+    `■ 客户实际反馈（草稿）\n${output.summary}`,
+    `■ 下一步动作（草稿）\n${output.next_action}`,
+    "（以上为 AI 草稿，经你修改确认保存后才形成正式沟通记录）",
+  ];
+  return `${sections.join("\n\n")}\n${COPY_FOOTER}`;
+}
+
+/** 按 run 类型分发；输出先经与后端同一份 Zod Schema 校验（结构异常返回 null，
+ * 调用方提示复制失败），不信任历史数据形态 */
 export function formatAiRunCopy(
   runType: RunTypeValue,
   leadName: string,
@@ -87,18 +111,22 @@ export function formatAiRunCopy(
   }
   try {
     if (runType === "analysis") {
-      return formatAnalysisCopy(
-        leadName,
-        generatedAtDisplay,
-        output as AnalysisOutput,
-      );
+      const verdict = analysisSchema.safeParse(output);
+      return verdict.success
+        ? formatAnalysisCopy(leadName, generatedAtDisplay, verdict.data)
+        : null;
     }
     if (runType === "call_prep") {
-      return formatCallPrepCopy(
-        leadName,
-        generatedAtDisplay,
-        output as CallPrepOutput,
-      );
+      const verdict = callPrepSchema.safeParse(output);
+      return verdict.success
+        ? formatCallPrepCopy(leadName, generatedAtDisplay, verdict.data)
+        : null;
+    }
+    if (runType === "interaction_summary") {
+      const verdict = interactionSummarySchema.safeParse(output);
+      return verdict.success
+        ? formatInteractionSummaryCopy(leadName, generatedAtDisplay, verdict.data)
+        : null;
     }
   } catch {
     return null;

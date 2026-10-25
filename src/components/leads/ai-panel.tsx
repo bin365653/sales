@@ -12,17 +12,19 @@ import {
 import { toAiRunView, type AiRunView } from "@/lib/ai-run-view";
 import { formatAiRunCopy } from "@/lib/ai-copy";
 import { toShanghaiDateTimeString } from "@/lib/format";
-import { analysisSchema, callPrepSchema, type AnalysisOutput, type CallPrepOutput } from "@/server/ai/validator";
+import { analysisSchema, callPrepSchema, interactionSummarySchema, type AnalysisOutput, type CallPrepOutput, type InteractionSummaryOutput } from "@/server/ai/validator";
 
-// 详情页 AI 面板（T09，UIUX §4.7/§6.2 全产品唯一 AI 交互模板，本任务交付两种入口）：
-// - 触发：入口按钮常驻用量行；同一客户已有 pending run 时按钮禁用（防并发重复调用）；
+// 详情页 AI 面板（T09/T10，UIUX §4.7/§6.2 全产品唯一 AI 交互模板）：
+// - 触发：入口按钮常驻用量行；同一客户已有 pending run 时按钮禁用（防并发重复调用，
+//   与沟通表单的「AI 生成摘要」经 externalPending/onPendingChange 双向互斥）；
 //   达到每日上限时禁用并提示（文案见 §7.2）。
 // - 运行：创建 run(pending) 后 2s 轮询，运行卡提示可离开页面；再次进入详情页时
 //   经初始 runs 续接 pending 轮询（§4.7）；轮询上限 90 次（约 3 分钟），超时停止
 //   自动刷新并提示到历史查看（服务端执行不受影响）。
-// - 成功：按 PRD §5.4 八项 / §5.5 六项结构化分区渲染（经与后端同一份 Zod Schema
-//   校验，结构异常降级为"无法解析"，不整面板崩溃）；事实绿、推断琥珀、
-//   信息不足灰底；末项"需要避免的表述"红色警示块；常驻"不自动拨打/发送"边界。
+// - 成功：按 PRD §5.4 八项 / §5.5 六项 / T10 摘要草稿两项结构化分区渲染（经与后端
+//   同一份 Zod Schema 校验，结构异常降级为"无法解析"，不整面板崩溃）；事实绿、
+//   推断琥珀、信息不足灰底；末项"需要避免的表述"红色警示块；常驻"不自动拨打/发送"边界。
+//   摘要草稿仅展示原始输出；回填与确认保存在沟通表单完成（§7.1 摘要审核流）。
 // - 失败：按 error_type 映射文案 + [重试]（= 新 run，原记录留痕，T08 retry API）。
 // - 复制：§4.10 纯文本分节格式（src/lib/ai-copy.ts 单测固化）。
 // - 历史：折叠列表，展开只读查看当时输出（渲染同成功态只读版）。
@@ -43,6 +45,10 @@ export interface AiPanelProps {
   initialRuns: AiRunView[];
   initialUsage: AiQuotaView;
   activePromptVersions: Partial<Record<RunTypeValue, number | null>>;
+  /** 沟通表单等其他入口有 pending run 时禁用本面板发起（§4.7 防并发重复调用） */
+  externalPending?: boolean;
+  /** 本面板 pending 状态变化时通知父级（与表单互斥） */
+  onPendingChange?: (pending: boolean) => void;
 }
 
 // ---------- 输出的宽容解析（渲染前校验，结构异常降级展示） ----------
@@ -54,6 +60,11 @@ function asAnalysis(output: unknown): AnalysisOutput | null {
 
 function asCallPrep(output: unknown): CallPrepOutput | null {
   const verdict = callPrepSchema.safeParse(output);
+  return verdict.success ? verdict.data : null;
+}
+
+function asInteractionSummary(output: unknown): InteractionSummaryOutput | null {
+  const verdict = interactionSummarySchema.safeParse(output);
   return verdict.success ? verdict.data : null;
 }
 
@@ -239,6 +250,24 @@ function CallPrepResultView({ output }: { output: CallPrepOutput }) {
   );
 }
 
+/** T10 摘要草稿（§7.1 摘要审核流）：面板只读展示原始输出；
+ * 回填与确认保存在沟通表单完成，正式记录以沟通时间线为准 */
+function InteractionSummaryResultView({ output }: { output: InteractionSummaryOutput }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <Section title="客户实际反馈（草稿）">
+        <p>{output.summary}</p>
+      </Section>
+      <Section title="下一步动作（草稿）">
+        <p>{output.next_action}</p>
+      </Section>
+      <p className="rounded-md border border-dashed border-violet-300 bg-violet-50/60 px-3 py-2 text-xs text-violet-700">
+        以上为 AI 草稿：在沟通表单点击「AI 生成摘要」可回填并核对修改，确认保存后才形成正式沟通记录。
+      </p>
+    </div>
+  );
+}
+
 function RunOutputView({ run }: { run: AiRunView }) {
   if (run.status === "pending") {
     return null;
@@ -256,6 +285,14 @@ function RunOutputView({ run }: { run: AiRunView }) {
       const output = asCallPrep(run.output);
       return output ? (
         <CallPrepResultView output={output} />
+      ) : (
+        <p className="text-sm text-gray-500">输出内容无法解析，可在历史中重试。</p>
+      );
+    }
+    if (run.runType === "interaction_summary") {
+      const output = asInteractionSummary(run.output);
+      return output ? (
+        <InteractionSummaryResultView output={output} />
       ) : (
         <p className="text-sm text-gray-500">输出内容无法解析，可在历史中重试。</p>
       );
@@ -289,6 +326,8 @@ export function AiPanel({
   initialRuns,
   initialUsage,
   activePromptVersions,
+  externalPending = false,
+  onPendingChange,
 }: AiPanelProps) {
   const [runs, setRuns] = useState<AiRunView[]>(initialRuns);
   const [usage, setUsage] = useState<AiQuotaView>(initialUsage);
@@ -302,11 +341,19 @@ export function AiPanel({
 
   const pendingRun = runs.find((run) => run.status === "pending") ?? null;
   const quotaExhausted = usage.used >= usage.limit;
-  const launchDisabled = busy || pendingRun !== null || quotaExhausted;
+  const launchDisabled = busy || pendingRun !== null || quotaExhausted || externalPending;
   const displayRun =
     (selectedRunId ? runs.find((run) => run.id === selectedRunId) : undefined) ??
     runs[0] ??
     null;
+
+  // 本面板 pending 状态变化时通知父级（与沟通表单的摘要发起互斥，§4.7）
+  const pendingChangeRef = useRef(onPendingChange);
+  pendingChangeRef.current = onPendingChange;
+  useEffect(() => {
+    pendingChangeRef.current?.(pendingRun !== null);
+    return () => pendingChangeRef.current?.(false);
+  }, [pendingRun]);
 
   /** 全量刷新历史 + 用量 + 提示词版本（发起失败/终态后调用） */
   const refreshHistory = useCallback(async (): Promise<void> => {
@@ -581,14 +628,17 @@ export function AiPanel({
                 重试（生成新记录）
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void startRun(displayRun.runType)}
-              disabled={launchDisabled}
-              className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              重新生成
-            </button>
+            {/* 摘要草稿不提供面板侧"重新生成"：需携带原始沟通内容，统一从沟通表单发起（T10） */}
+            {displayRun.runType !== "interaction_summary" && (
+              <button
+                type="button"
+                onClick={() => void startRun(displayRun.runType)}
+                disabled={launchDisabled}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                重新生成
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setHistoryOpen((prev) => !prev)}
@@ -614,7 +664,7 @@ export function AiPanel({
             <span className="text-sm font-semibold text-gray-900">
               AI 历史（{runs.length} 条）
             </span>
-            {(["analysis", "call_prep"] as RunTypeValue[]).map((runType) =>
+            {(["analysis", "call_prep", "interaction_summary"] as RunTypeValue[]).map((runType) =>
               activePromptVersions[runType] ? (
                 <span key={runType}>
                   {RUN_TYPE_LABELS[runType]}当前提示词 v{activePromptVersions[runType]}

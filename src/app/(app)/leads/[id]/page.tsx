@@ -133,7 +133,7 @@ export default async function LeadDetailPage({
   );
   const aiUsage = await getTodayUsage(user.id).catch(() => ({ used: 0, limit: 0 }));
   const activePromptVersions: Partial<Record<RunTypeValue, number | null>> = {};
-  for (const runType of ["analysis", "call_prep"] as RunTypeValue[]) {
+  for (const runType of ["analysis", "call_prep", "interaction_summary"] as RunTypeValue[]) {
     try {
       activePromptVersions[runType] = (await resolveActivePromptVersion(runType)).version;
     } catch {
@@ -180,6 +180,7 @@ export default async function LeadDetailPage({
       : null,
     isQualified: row.isQualified,
     demoBooked: row.demoBooked,
+    aiRunId: row.aiRunId,
     userName: actorNames.get(row.userId) ?? null,
     editAudit: (Array.isArray(row.editAudit) ? row.editAudit : []).map(
       (entry): InteractionAuditEntry => {

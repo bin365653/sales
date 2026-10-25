@@ -38,6 +38,41 @@ function occurredDateOf(value: string): Date {
 }
 
 /**
+ * AI 草稿来源校验（T10，§7.1 摘要审核流）：仅接受"本人 + 本线索 + 成功的
+ * interaction_summary run"。AI 输出本身只存 ai_runs.output（K3）——写入沟通表
+ * 的始终是用户确认后的内容；此处仅登记来源，使原始输出与最终记录可区分。
+ * 不合法引用视为请求错误（400），拒绝静默降级。
+ */
+async function resolveAiDraftRunId(
+  tx: Db,
+  leadId: string,
+  actorId: string,
+  aiRunId: string | undefined,
+): Promise<string | null> {
+  if (!aiRunId) {
+    return null;
+  }
+  const run = await tx.aiRun.findUnique({
+    where: { id: aiRunId },
+    select: { leadId: true, userId: true, runType: true, status: true },
+  });
+  if (
+    !run ||
+    run.leadId !== leadId ||
+    run.userId !== actorId ||
+    run.runType !== "interaction_summary" ||
+    run.status !== "success"
+  ) {
+    throw new ApiError(
+      400,
+      "invalid_ai_run",
+      "AI 草稿来源记录不合法，请移除来源后保存，或重新生成摘要",
+    );
+  }
+  return aiRunId;
+}
+
+/**
  * K4 阶段联动目标解析（只读，不写库）：
  * 候选目标 = 勾选项对应的语义锚点阶段；仅当目标存在、启用且排序晚于当前阶段时参与，
  * 取排序最远者（同时勾选合格与预约 → 推进到「已预约演示」）。
@@ -153,6 +188,7 @@ export async function applyInteractionWrite(
     isQualified: input.isQualified ?? false,
     demoBooked: input.demoBooked ?? false,
   };
+  const aiRunId = await resolveAiDraftRunId(tx, lead.id, actorId, input.aiRunId);
 
   const created = await tx.interaction.create({
     data: {
@@ -173,6 +209,7 @@ export async function applyInteractionWrite(
       nextContactAt,
       isQualified: flags.isQualified,
       demoBooked: flags.demoBooked,
+      aiRunId,
     },
   });
 

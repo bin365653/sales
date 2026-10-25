@@ -45,6 +45,8 @@ export interface InteractionView {
   nextContactAtInput: string | null;
   isQualified: boolean;
   demoBooked: boolean;
+  /** AI 摘要草稿来源 run（T10）：非空 = 该记录确认自 AI 草稿（与人工输入可区分） */
+  aiRunId: string | null;
   userName: string | null;
   editAudit: InteractionAuditEntry[];
 }
@@ -56,6 +58,10 @@ export interface InteractionsPanelProps {
   currentStageSortOrder: number;
   stages: InteractionStageOption[];
   interactions: InteractionView[];
+  /** 详情页 AI 面板存在 pending run 时禁用表单摘要发起（§4.7 互斥，T10） */
+  aiPending?: boolean;
+  /** 表单摘要 run 生命周期通知（与 AI 面板互斥） */
+  onAiPendingChange?: (pending: boolean) => void;
 }
 
 function auditValueText(value: unknown): string {
@@ -93,6 +99,8 @@ export function InteractionsPanel({
   currentStageSortOrder,
   stages,
   interactions,
+  aiPending = false,
+  onAiPendingChange,
 }: InteractionsPanelProps) {
   const router = useRouter();
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
@@ -159,6 +167,8 @@ export function InteractionsPanel({
             stages={stages}
             currentStageName={currentStageName}
             currentStageSortOrder={currentStageSortOrder}
+            aiPending={aiPending}
+            onAiPendingChange={onAiPendingChange}
             initial={{
               occurredAtInput: "",
               channel: "phone",
@@ -233,6 +243,9 @@ export function InteractionsPanel({
                   : badge("未标记有效", "bg-gray-50 text-gray-400")}
                 {item.isQualified && badge("合格线索", "bg-blue-50 text-blue-700")}
                 {item.demoBooked && badge("预约演示", "bg-violet-50 text-violet-700")}
+                {/* AI 草稿确认来源（T10）：原始输出与最终记录可区分（§7.1 摘要审核流） */}
+                {item.aiRunId &&
+                  badge("✦ AI 草稿确认", "border border-dashed border-violet-400 text-violet-700")}
                 {auditCount > 0 &&
                   badge(`已修正 ${auditCount} 次`, "bg-amber-50 text-amber-700")}
                 <span className="ml-auto flex items-center gap-2">

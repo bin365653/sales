@@ -27,6 +27,55 @@ describe("aiRunCreateSchema", () => {
     ).toBe(false);
   });
 
+  it("notes（T10）：interaction_summary 必填，其余类型禁止携带", () => {
+    // 摘要缺 notes → 拒绝（防"无原始内容"调用导致模型无料可依）
+    expect(
+      aiRunCreateSchema.safeParse({ leadId: UUID, runType: "interaction_summary" })
+        .success,
+    ).toBe(false);
+    // 空白/超长 notes → 拒绝
+    expect(
+      aiRunCreateSchema.safeParse({
+        leadId: UUID,
+        runType: "interaction_summary",
+        notes: "   ",
+      }).success,
+    ).toBe(false);
+    expect(
+      aiRunCreateSchema.safeParse({
+        leadId: UUID,
+        runType: "interaction_summary",
+        notes: "x".repeat(5001),
+      }).success,
+    ).toBe(false);
+    // analysis/call_prep 携带 notes → 拒绝（防止误用语义）
+    expect(
+      aiRunCreateSchema.safeParse({
+        leadId: UUID,
+        runType: "analysis",
+        notes: "原始内容",
+      }).success,
+    ).toBe(false);
+    expect(
+      aiRunCreateSchema.safeParse({
+        leadId: UUID,
+        runType: "call_prep",
+        notes: "原始内容",
+      }).success,
+    ).toBe(false);
+    // 合法：摘要带 notes，其余不带
+    expect(
+      aiRunCreateSchema.parse({
+        leadId: UUID,
+        runType: "interaction_summary",
+        notes: "客户说现有系统太分散，想了解报价",
+      }).notes,
+    ).toBe("客户说现有系统太分散，想了解报价");
+    expect(
+      aiRunCreateSchema.safeParse({ leadId: UUID, runType: "call_prep" }).success,
+    ).toBe(true);
+  });
+
   it("三类 run 均有中文标签（UI 文案）", () => {
     expect(Object.keys(RUN_TYPE_LABELS)).toEqual([
       "analysis",

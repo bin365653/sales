@@ -63,10 +63,12 @@ export const callPrepSchema = z.object({
 export type CallPrepOutput = z.infer<typeof callPrepSchema>;
 
 // ---------- interaction_summary（T10 摘要草稿回填：反馈 + 下一步） ----------
+// next_action 上限对齐目标列 leads 侧沟通表单的落库约束（interactions.next_action
+// VARCHAR(255)），超限视为 invalid_output 走纠错重试，避免回填后保存被表单校验拒绝。
 
 export const interactionSummarySchema = z.object({
   summary: z.string().min(1).max(2000),
-  next_action: z.string().min(1).max(500),
+  next_action: z.string().min(1).max(255),
 });
 
 export type InteractionSummaryOutput = z.infer<typeof interactionSummarySchema>;

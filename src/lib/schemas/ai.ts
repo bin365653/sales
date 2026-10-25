@@ -20,15 +20,44 @@ export const RUN_TYPE_BADGE_CLASS: Record<RunTypeValue, string> = {
 };
 
 /** POST /api/ai/runs 与 retry 共用 */
-export const aiRunCreateSchema = z.object({
-  leadId: z
-    .string()
-    .regex(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-      "客户标识不合法",
-    ),
-  runType: z.enum(RUN_TYPES, { message: "AI 任务类型不合法" }),
-});
+// notes（T10）：仅 interaction_summary 接受——销售口述/粘贴的原始沟通内容，
+// 随快照落 ai_runs.input_snapshot 留痕（可复现）；其余类型必须不带（防止误用）。
+const rawNotesSchema = z
+  .string()
+  .trim()
+  .min(1, "请先提供原始沟通内容（粘贴或输入到「客户实际反馈」后重试）")
+  .max(5000, "原始沟通内容不能超过 5000 字");
+
+export const aiRunCreateSchema = z
+  .object({
+    leadId: z
+      .string()
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+        "客户标识不合法",
+      ),
+    runType: z.enum(RUN_TYPES, { message: "AI 任务类型不合法" }),
+    notes: rawNotesSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.runType === "interaction_summary") {
+      if (value.notes === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["notes"],
+          message: "AI 生成摘要需提供原始沟通内容",
+        });
+      }
+      return;
+    }
+    if (value.notes !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["notes"],
+        message: "该 AI 任务类型不接受原始沟通内容",
+      });
+    }
+  });
 
 export type AiRunCreateInput = z.infer<typeof aiRunCreateSchema>;
 

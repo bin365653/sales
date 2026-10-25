@@ -128,3 +128,22 @@ describe("修正 Schema（M11）", () => {
     ).toBe(false);
   });
 });
+
+describe("AI 草稿来源 aiRunId（T10）", () => {
+  it("新建：合法 UUID 可选携带；非 UUID 拒绝", () => {
+    const runId = "33333333-3333-3333-3333-333333333333";
+    expect(
+      interactionCreateSchema.parse(validInput({ aiRunId: runId })).aiRunId,
+    ).toBe(runId);
+    expect(
+      interactionCreateSchema.safeParse(validInput({ aiRunId: "not-a-uuid" })).success,
+    ).toBe(false);
+  });
+
+  it("修正：不接受 aiRunId（来源不可经修正改写）", () => {
+    const parsed = interactionUpdateSchema.parse(
+      validInput({ aiRunId: "33333333-3333-3333-3333-333333333333" }),
+    );
+    expect(parsed).not.toHaveProperty("aiRunId");
+  });
+});
