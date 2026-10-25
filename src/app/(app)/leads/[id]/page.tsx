@@ -3,6 +3,7 @@ import type { Lead } from "@prisma/client";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { getLeadDetail } from "@/server/services/leads";
 import { listInteractions } from "@/server/services/interactions";
+import { listLeadTasks } from "@/server/services/tasks";
 import { listFieldDefs } from "@/server/services/lead-fields";
 import { listStages } from "@/server/services/stages";
 import { getUserNames } from "@/server/services/users";
@@ -25,6 +26,7 @@ import {
   InteractionAuditEntry,
   InteractionView,
 } from "@/components/leads/interactions-panel";
+import { toTaskView } from "@/components/tasks/task-view";
 import { LeadDetailClient } from "@/components/leads/lead-detail-client";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +34,7 @@ export const dynamic = "force-dynamic";
 // P5 客户详情（T04）：画像全部字段 + 核实状态徽标 + 阶段时间线（lead_events）。
 // 服务端完成全部数据整形（时间/文案/字段名映射），客户端组件只负责
 // 查看/编辑切换、阶段流转与删除的交互。沟通记录区块随 T06 交付；
-// AI 面板/任务列表分别随 T09/T07 交付。
+// 任务区块随 T07 交付；AI 面板随 T09 交付。
 
 interface StageSnapshotEntryLike {
   id: string;
@@ -107,7 +109,7 @@ export default async function LeadDetailPage({
     notFound();
   }
 
-  const [defs, stages, actorNames, interactions] = await Promise.all([
+  const [defs, stages, actorNames, interactions, tasks] = await Promise.all([
     listFieldDefs({ activeOnly: false }),
     listStages({ activeOnly: true }),
     getUserNames(
@@ -116,7 +118,24 @@ export default async function LeadDetailPage({
         .filter((actorId): actorId is string => actorId !== null),
     ),
     listInteractions(user, id),
+    listLeadTasks(user, id),
   ]);
+
+  const now = new Date();
+  const taskViews = tasks.map((task) =>
+    toTaskView(
+      {
+        ...task,
+        lead: {
+          id: detail.lead.id,
+          name: detail.lead.name,
+          stageName: detail.lead.stage.name,
+          stageSortOrder: detail.lead.stage.sortOrder,
+        },
+      },
+      now,
+    ),
+  );
 
   const interactionRows: InteractionView[] = interactions.map((row) => ({
     id: row.id,
@@ -357,6 +376,7 @@ export default async function LeadDetailPage({
       }))}
       currentStageSortOrder={lead.stage.sortOrder}
       interactions={interactionRows}
+      tasks={taskViews}
       formValues={formValues}
     />
   );

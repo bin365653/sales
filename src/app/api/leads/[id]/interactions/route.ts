@@ -4,7 +4,7 @@ import {
   errorResponse,
   requireUser,
 } from "@/server/http/api";
-import { interactionCreateSchema } from "@/lib/schemas/interaction";
+import { interactionCreateWithTaskSchema } from "@/lib/schemas/task";
 import {
   createInteraction,
   listInteractions,
@@ -34,7 +34,8 @@ export async function GET(
 /**
  * POST /api/leads/:id/interactions：保存沟通记录（单事务，实施计划 §6）：
  * 记录 + 刷新 last_contact_at + （可选）next_contact_at + "本次确认"核实状态 +
- * 条件推进阶段（K4，勾选合格/预约且当前阶段更早时自动流转并写 stage_changed 事件）。
+ * 条件推进阶段（K4，勾选合格/预约且当前阶段更早时自动流转并写 stage_changed 事件）+
+ * （可选，T07/UIUX P5）同时创建任务（createTask，与沟通同事务）。
  */
 export async function POST(
   request: NextRequest,
@@ -44,7 +45,7 @@ export async function POST(
     assertSameOrigin(request);
     const user = await requireUser(request);
     const { id } = await params;
-    const input = interactionCreateSchema.parse(await request.json());
+    const input = interactionCreateWithTaskSchema.parse(await request.json());
     const result = await createInteraction(user, id, input);
     return NextResponse.json(result, { status: 201 });
   } catch (error) {

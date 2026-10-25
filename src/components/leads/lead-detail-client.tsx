@@ -16,6 +16,8 @@ import {
   InteractionsPanel,
   type InteractionView,
 } from "@/components/leads/interactions-panel";
+import { TasksPanel } from "@/components/tasks/tasks-panel";
+import type { TaskView } from "@/components/tasks/task-view";
 import type { FieldDefRow } from "@/lib/lead-form-fields";
 
 // 客户详情交互壳（P5，T04）：查看（画像+时间线）/ 编辑切换、阶段流转、软删除。
@@ -75,6 +77,7 @@ export interface LeadDetailClientProps {
   }[];
   currentStageSortOrder: number;
   interactions: InteractionView[];
+  tasks: TaskView[];
   formValues: Record<string, string | number | boolean | null>;
 }
 
@@ -97,6 +100,7 @@ export function LeadDetailClient({
   stageOptions,
   currentStageSortOrder,
   interactions,
+  tasks,
   formValues,
 }: LeadDetailClientProps) {
   const router = useRouter();
@@ -393,7 +397,7 @@ export function LeadDetailClient({
             </ol>
           </section>
 
-          {/* 沟通记录（T06 交付）；任务 / AI 面板随 T07 / T09 交付 */}
+          {/* 沟通记录（T06 交付）；AI 面板随 T09 交付 */}
           <InteractionsPanel
             leadId={lead.id}
             leadName={lead.name}
@@ -402,10 +406,14 @@ export function LeadDetailClient({
             stages={stageOptions}
             interactions={interactions}
           />
+          {/* 任务区块（T07 交付）：待处理在前，完成弹窗=沟通结果+下一任务单事务 */}
+          <TasksPanel
+            leadId={lead.id}
+            leadName={lead.name}
+            stages={stageOptions}
+            tasks={tasks}
+          />
           <div className="flex flex-wrap gap-3 text-sm text-gray-400">
-            <span className="rounded-md border border-dashed border-gray-300 px-3 py-1.5">
-              任务列表（T07）
-            </span>
             <span className="rounded-md border border-dashed border-gray-300 px-3 py-1.5">
               AI 客户分析（T09）
             </span>

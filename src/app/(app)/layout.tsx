@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 const NAV_ITEMS: ReadonlyArray<{ label: string; href: string | null }> = [
   { label: "工作台", href: "/" },
   { label: "线索池", href: "/leads" },
-  { label: "任务中心", href: null },
+  { label: "任务中心", href: "/tasks" },
   { label: "数据看板", href: null },
   { label: "实验管理", href: null },
   { label: "设置中心", href: null },
@@ -72,7 +72,7 @@ export default async function AppLayout({
         <div className="mb-6 px-2 text-lg font-semibold">勤策</div>
         <NavList layout="sidebar" />
         <div className="mt-auto px-2 text-xs text-gray-400">
-          V1.0 · 工程实施计划 T04
+          V1.0 · 工程实施计划 T07
         </div>
       </aside>
 

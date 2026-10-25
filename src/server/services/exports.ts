@@ -5,6 +5,7 @@ import { ApiError } from "@/server/http/api";
 import { writeAudit } from "@/server/auth/audit";
 import { AuthUser } from "@/lib/auth";
 import { toShanghaiDateTimeString } from "@/lib/format";
+import { TASK_STATUS_LABELS, TASK_TYPE_LABELS } from "@/lib/tasks";
 import { LeadListQuery } from "@/lib/schemas/lead";
 import { LeadsExportCreateInput } from "@/lib/schemas/import";
 import { CHANNEL_LABELS, DIRECTION_LABELS } from "@/lib/schemas/interaction";
@@ -22,8 +23,8 @@ import { buildLeadListWhere } from "@/server/services/leads";
 // - 列表导出的行集合 = buildLeadListWhere（与线索池列表同一构造器）→
 //   "导出范围正确"由同一段代码保证，销售只含本人数据、管理员含全量（§8.2）；
 // - 个人全量导出（/api/exports/me）恒为"本人创建的客户"（与管理员身份无关），
-//   V1.0 含客户 XLSX+CSV；沟通记录自 T06 落表并入（含软删除客户的沟通，
-//   M1 历史不丢），任务/AI 记录随 T07/T08 落表后继续并入同一 ZIP；
+//   V1.0 含客户 XLSX+CSV；沟通记录自 T06、任务自 T07 落表并入（含软删除客户的
+//   记录，M1 历史不丢），AI 记录随 T08 落表后继续并入同一 ZIP；
 // - 所有导出走 export_files 落库 + 24 小时过期 + 每用户 5 次/小时限流 + 审计；
 // - 公式注入转义在 buildLeadExportTable 内完成（XLSX 与 CSV 同一规则），
 //   沟通记录 CSV 的文本单元格在拼行时同样转义。
@@ -289,6 +290,42 @@ async function buildMyInteractionsCsv(userId: string): Promise<string> {
   return buildCsvContent(headers, cells);
 }
 
+/** 任务 CSV（M9 个人全量，T07 并入）：含软删除客户的任务，按截止时间正序 */
+async function buildMyTasksCsv(userId: string): Promise<string> {
+  const rows = await prisma.task.findMany({
+    where: { lead: { ownerId: userId } },
+    include: {
+      lead: { select: { name: true } },
+      interaction: { select: { occurredAt: true } },
+    },
+    orderBy: [{ dueAt: "asc" }, { id: "asc" }],
+  });
+
+  const headers = [
+    "任务标题",
+    "客户名称",
+    "任务类型",
+    "截止时间",
+    "状态",
+    "完成时间",
+    "完成时沟通时间",
+    "备注",
+  ];
+  const cells = rows.map((row) =>
+    [
+      row.title,
+      row.lead.name,
+      TASK_TYPE_LABELS[row.type],
+      toShanghaiDateTimeString(row.dueAt),
+      TASK_STATUS_LABELS[row.status],
+      row.completedAt ? toShanghaiDateTimeString(row.completedAt) : "",
+      row.interaction ? toShanghaiDateTimeString(row.interaction.occurredAt) : "",
+      row.remark ?? "",
+    ].map((cell) => escapeFormulaCell(cell)),
+  );
+  return buildCsvContent(headers, cells);
+}
+
 export async function createMyDataExport(
   actor: AuthUser,
 ): Promise<ExportCreateResult> {
@@ -298,15 +335,17 @@ export async function createMyDataExport(
     ownerId: actor.id,
     deletedAt: null,
   });
-  const [xlsx, csv, interactionsCsv] = await Promise.all([
+  const [xlsx, csv, interactionsCsv, tasksCsv] = await Promise.all([
     buildLeadFileBytes(rows, "xlsx"),
     buildLeadFileBytes(rows, "csv"),
     buildMyInteractionsCsv(actor.id),
+    buildMyTasksCsv(actor.id),
   ]);
   const zip = new JSZip();
   zip.file("客户全量.xlsx", xlsx.bytes);
   zip.file("客户全量.csv", csv.bytes);
   zip.file("沟通记录.csv", interactionsCsv);
+  zip.file("任务.csv", tasksCsv);
   const zipped = await zip.generateAsync({ type: "nodebuffer" });
   const filename = `我的全量数据_${shanghaiStamp()}.zip`;
   const { id } = await persistExportFile(actor, {

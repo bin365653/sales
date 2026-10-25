@@ -1,25 +1,26 @@
-import { Interaction, Lead, LeadStage, Prisma } from "@prisma/client";
+import { Interaction, Lead, LeadStage, Prisma, Task } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { ApiError } from "@/server/http/api";
 import { AuthUser } from "@/lib/auth";
 import { parseShanghaiDate } from "@/lib/schemas/lead";
+import { InteractionUpdateInput } from "@/lib/schemas/interaction";
+import { InteractionCreateWithTaskInput } from "@/lib/schemas/task";
 import {
-  InteractionCreateInput,
-  InteractionUpdateInput,
-} from "@/lib/schemas/interaction";
-import {
-  BOOKED_DEMO_STAGE_ANCHOR,
-  QUALIFIED_STAGE_ANCHOR,
-} from "@/lib/stages";
+  applyInteractionWrite,
+  bumpLeadForInteraction,
+  resolveStageAdvance,
+  writeAdvanceEvent,
+  type StageAdvance,
+} from "@/server/services/interaction-write";
+import { insertTaskInTx } from "@/server/services/tasks";
 import { assertLeadReadable, assertLeadWritable } from "@/server/permissions";
-import { buildStageSnapshot } from "@/server/services/stages";
 
 // 沟通记录服务（T06，PRD §5.6 / K4 / M11）。
 // 关键不变量：
 // - 保存为单事务：沟通记录 + last_contact_at + （可选）next_contact_at +
-//   "本次确认"核实状态 + 条件推进阶段（K4）——任一步失败全部回滚（§7 原则 5）；
-// - K4 推进只进不退：当前阶段排序不早于目标（或目标停用/缺失）时不动作；
-//   同时勾选合格与预约时推进到排序更远的目标，一次流转一条 stage_changed 事件；
+//   "本次确认"核实状态 + 条件推进阶段（K4）+（可选）同时创建任务（T07）——
+//   任一步失败全部回滚（§7 原则 5）；写入核心见 interaction-write.ts（与
+//   完成任务弹窗共用同一实现）；
 // - 可见性经线索归属判定（§4.4）：本表不存归属冗余列，读写都过 permissions 层；
 // - 沟通记录只追加、不可删除（M1）；修正不改写历史值，edit_audit 追加
 //   {at, by, changed:{field:{from,to}}}（M11：谁、何时、改了什么）；
@@ -27,13 +28,7 @@ import { buildStageSnapshot } from "@/server/services/stages";
 // - 修正时 lead.next_contact_at 仅在该记录仍是最新一条沟通时同步，
 //   防止修正旧记录的下次联系时间覆盖更新计划。
 
-type Db = Prisma.TransactionClient | typeof prisma;
-
-export interface StageAdvance {
-  fromStage: LeadStage;
-  toStage: LeadStage;
-  triggers: string[];
-}
+export type { StageAdvance };
 
 export interface SaveInteractionResult {
   interaction: Interaction;
@@ -41,16 +36,8 @@ export interface SaveInteractionResult {
   stageAdvanced: { fromStageId: string; toStageId: string } | null;
   /** "本次确认"勾选后更新的画像核实状态字段（仅新建，修正不含此项） */
   factStatusConfirmed: string[];
-}
-
-function occurredDateOf(value: string): Date {
-  return parseShanghaiDate(value);
-}
-
-function nextContactDateOf(
-  value: string | null | undefined,
-): Date | null {
-  return value ? parseShanghaiDate(value) : null;
+  /** "同时创建任务"勾选后创建的任务（T07，UIUX P5）；null = 未勾选 */
+  createdTask: Task | null;
 }
 
 async function loadActiveLeadWithStageOrThrow(
@@ -79,119 +66,16 @@ async function loadInteractionWithLeadOrThrow(
   return row;
 }
 
-/**
- * K4 阶段联动目标解析（只读，不写库）：
- * 候选目标 = 勾选项对应的语义锚点阶段；仅当目标存在、启用且排序晚于当前阶段时参与，
- * 取排序最远者（同时勾选合格与预约 → 推进到「已预约演示」）。
- * 目标停用/缺失/不晚于当前 → 返回 null（不自动推进，用户可手动流转）。
- */
-async function resolveStageAdvance(
-  tx: Db,
-  lead: Lead & { stage: LeadStage },
-  flags: { isQualified: boolean; demoBooked: boolean },
-): Promise<StageAdvance | null> {
-  const candidates: { anchor: string; trigger: string }[] = [];
-  if (flags.isQualified) {
-    candidates.push({ anchor: QUALIFIED_STAGE_ANCHOR, trigger: "is_qualified" });
-  }
-  if (flags.demoBooked) {
-    candidates.push({ anchor: BOOKED_DEMO_STAGE_ANCHOR, trigger: "demo_booked" });
-  }
-  let bestStage: LeadStage | null = null;
-  let bestTriggers: string[] = [];
-  for (const candidate of candidates) {
-    const stage = await tx.leadStage.findUnique({
-      where: { semanticKey: candidate.anchor },
-    });
-    if (!stage || !stage.isActive) {
-      continue;
-    }
-    if (stage.sortOrder <= lead.stage.sortOrder) {
-      continue;
-    }
-    if (bestStage && stage.sortOrder <= bestStage.sortOrder) {
-      continue;
-    }
-    bestStage = stage;
-    // 同时勾选合格与预约：两个触发都记入同一次流转
-    bestTriggers = [...bestTriggers, candidate.trigger];
-  }
-  if (!bestStage) {
-    return null;
-  }
-  return {
-    fromStage: lead.stage,
-    toStage: bestStage,
-    triggers: bestTriggers,
-  };
-}
-
-async function writeAdvanceEvent(
-  tx: Db,
-  leadId: string,
-  actorId: string,
-  advance: StageAdvance,
-  interactionId: string,
-): Promise<void> {
-  await tx.leadEvent.create({
-    data: {
-      leadId,
-      actorId,
-      eventType: "stage_changed",
-      fromStageId: advance.fromStage.id,
-      toStageId: advance.toStage.id,
-      stageSnapshot: {
-        from: buildStageSnapshot(advance.fromStage),
-        to: buildStageSnapshot(advance.toStage),
-      } as unknown as Prisma.InputJsonValue,
-      detail: {
-        reason: "interaction_advance",
-        interactionId,
-        triggers: advance.triggers,
-      } as unknown as Prisma.InputJsonValue,
-    },
-  });
-}
-
-async function bumpLeadForInteraction(
-  tx: Db,
-  leadId: string,
-  expectedStageId: string | null,
-  data: Prisma.LeadUncheckedUpdateInput,
-): Promise<void> {
-  const updated = await tx.lead.updateMany({
-    where: {
-      id: leadId,
-      deletedAt: null,
-      ...(expectedStageId ? { stageId: expectedStageId } : {}),
-    },
-    data: { ...data, dataVersion: { increment: 1 } },
-  });
-  if (updated.count !== 1) {
-    throw new ApiError(
-      409,
-      "version_conflict",
-      "数据已被其他操作修改，请刷新后重试",
-    );
-  }
-}
-
 // ---------- 保存（POST /api/leads/:id/interactions） ----------
 
 export async function createInteraction(
   actor: AuthUser,
   leadId: string,
-  input: InteractionCreateInput,
+  input: InteractionCreateWithTaskInput,
 ): Promise<SaveInteractionResult> {
   const lead = await loadActiveLeadWithStageOrThrow(leadId);
   assertLeadWritable(actor, lead.ownerId);
 
-  const occurredAt = occurredDateOf(input.occurredAt);
-  const nextContactAt = nextContactDateOf(input.nextContactAt);
-  const flags = {
-    isQualified: input.isQualified ?? false,
-    demoBooked: input.demoBooked ?? false,
-  };
   const factStatusConfirmed: string[] = [];
   if (input.confirmCurrentSystem) {
     factStatusConfirmed.push("current_system");
@@ -200,54 +84,25 @@ export async function createInteraction(
     factStatusConfirmed.push("purchase_time");
   }
 
-  const { interaction, advance } = await prisma.$transaction(async (tx) => {
-    const created = await tx.interaction.create({
-      data: {
-        leadId: lead.id,
-        userId: actor.id,
-        occurredAt,
-        channel: input.channel,
-        direction: input.direction,
-        connected: input.connected,
-        effective: input.effective,
-        feedback: input.feedback ?? null,
-        confirmedPains: input.confirmedPains ?? null,
-        currentSystemConfirmed: input.currentSystemConfirmed ?? null,
-        purchaseTimeConfirmed: input.purchaseTimeConfirmed ?? null,
-        decisionMakerNote: input.decisionMakerNote ?? null,
-        objections: input.objections ?? null,
-        nextAction: input.nextAction ?? null,
-        nextContactAt,
-        isQualified: flags.isQualified,
-        demoBooked: flags.demoBooked,
-      },
-    });
-
-    const advance = await resolveStageAdvance(tx, lead, flags);
-
-    await bumpLeadForInteraction(tx, lead.id, advance ? lead.stageId : null, {
-      // 补录更早的沟通不回退最近联系时间
-      lastContactAt:
-        !lead.lastContactAt || lead.lastContactAt < occurredAt
-          ? occurredAt
-          : lead.lastContactAt,
-      // 未填写下次联系时间时不改动线索既有计划
-      ...(input.nextContactAt ? { nextContactAt } : {}),
-      // "本次确认"（UIUX P5）：人工确认动作 → 画像核实状态置为已确认（不覆盖字段值）
-      ...(input.confirmCurrentSystem
-        ? { currentSystemStatus: "confirmed" as const }
-        : {}),
-      ...(input.confirmPurchaseTime
-        ? { purchaseTimeStatus: "confirmed" as const }
-        : {}),
-      ...(advance ? { stageId: advance.toStage.id } : {}),
-    });
-
-    if (advance) {
-      await writeAdvanceEvent(tx, lead.id, actor.id, advance, created.id);
-    }
-    return { interaction: created, advance };
-  });
+  const { interaction, advance, createdTask } = await prisma.$transaction(
+    async (tx) => {
+      const result = await applyInteractionWrite(tx, lead, actor.id, input);
+      // "同时创建任务"（UIUX P5 / PRD"设置下次联系时间并生成任务"）：
+      // 与沟通保存同事务，任务归属线索负责人快照
+      const createdTask = input.createTask
+        ? await insertTaskInTx(tx, {
+            leadId: lead.id,
+            assigneeId: lead.ownerId,
+            createdBy: actor.id,
+            type: input.createTask.type,
+            title: input.createTask.title,
+            dueAt: parseShanghaiDate(input.createTask.dueAt),
+            remark: input.createTask.remark ?? null,
+          })
+        : null;
+      return { ...result, createdTask };
+    },
+  );
 
   return {
     interaction,
@@ -255,6 +110,7 @@ export async function createInteraction(
       ? { fromStageId: advance.fromStage.id, toStageId: advance.toStage.id }
       : null,
     factStatusConfirmed,
+    createdTask,
   };
 }
 
@@ -281,8 +137,10 @@ export async function updateInteraction(
   const existing = await loadInteractionWithLeadOrThrow(interactionId);
   assertLeadWritable(actor, existing.lead.ownerId);
 
-  const occurredAt = occurredDateOf(input.occurredAt);
-  const nextContactAt = nextContactDateOf(input.nextContactAt);
+  const occurredAt = parseShanghaiDate(input.occurredAt);
+  const nextContactAt = input.nextContactAt
+    ? parseShanghaiDate(input.nextContactAt)
+    : null;
   const flags = {
     isQualified: input.isQualified ?? false,
     demoBooked: input.demoBooked ?? false,
@@ -355,6 +213,7 @@ export async function updateInteraction(
       interaction: existing,
       stageAdvanced: null,
       factStatusConfirmed: [],
+      createdTask: null,
     };
   }
 
@@ -425,6 +284,7 @@ export async function updateInteraction(
       ? { fromStageId: advance.fromStage.id, toStageId: advance.toStage.id }
       : null,
     factStatusConfirmed: [],
+    createdTask: null,
   };
 }
 

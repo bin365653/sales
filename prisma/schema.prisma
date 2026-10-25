@@ -198,6 +198,7 @@ model Lead {
   stage        LeadStage     @relation(fields: [stageId], references: [id])
   events       LeadEvent[]
   interactions Interaction[]
+  tasks        Task[]
 
   @@index([ownerId, deletedAt, stageId])
   @@index([ownerId, nextContactAt])
@@ -367,7 +368,54 @@ model Interaction {
   updatedAt              DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   lead Lead @relation(fields: [leadId], references: [id])
+  task Task?
 
   @@index([leadId, occurredAt])
   @@map("interactions")
+}
+
+// ---------- 销售任务（T07，实施计划 §4.2 tasks / PRD §5.7） ----------
+// 每项任务必须关联客户；assignee_id 记录任务归属人（创建时快照 = 线索负责人），
+// created_by 记录创建者；可见性一律经线索归属判定（§4.4，读写都过 permissions 层）。
+// 完成必须留 completed_at（验收项）；任务只可取消、不可删除（C11）。
+// interaction_id：完成弹窗生成的沟通记录引用（UIUX P6"已完成任务显示完成时间
+// 与当时填写的沟通记录链接"）；手工新建/取消的任务为空。
+
+enum task_type {
+  first_contact
+  follow_up
+  needs_diag
+  online_demo
+  offline_visit
+  quote_follow
+  revive
+}
+
+enum task_status {
+  pending
+  done
+  canceled
+}
+
+model Task {
+  id            String      @id @default(uuid(7)) @db.Uuid
+  leadId        String      @map("lead_id") @db.Uuid
+  assigneeId    String      @map("assignee_id") @db.Uuid
+  createdBy     String      @map("created_by") @db.Uuid
+  type          task_type
+  title         String      @db.VarChar(128)
+  dueAt         DateTime    @map("due_at") @db.Timestamptz(6)
+  status        task_status @default(pending)
+  remark        String?     @db.Text
+  completedAt   DateTime?   @map("completed_at") @db.Timestamptz(6)
+  interactionId String?     @unique @map("interaction_id") @db.Uuid
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  lead        Lead        @relation(fields: [leadId], references: [id])
+  interaction Interaction? @relation(fields: [interactionId], references: [id])
+
+  @@index([assigneeId, status, dueAt])
+  @@index([leadId, status, dueAt])
+  @@map("tasks")
 }

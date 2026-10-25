@@ -119,7 +119,7 @@ export async function cleanupTestUsers(): Promise<void> {
       where: { userId: { in: createdUserIds } },
     });
   }
-  // 1) 测试用户名下的线索：先删子表（事件/沟通记录，T06 起含 interactions）
+  // 1) 测试用户名下的线索：先删子表（任务/事件/沟通记录，T07 起含 tasks）
   //    再删线索（覆盖夹具与服务层两种创建路径）
   if (createdUserIds.length > 0) {
     const leads = await prisma.lead.findMany({
@@ -128,6 +128,7 @@ export async function cleanupTestUsers(): Promise<void> {
     });
     const leadIds = leads.map((lead) => lead.id);
     if (leadIds.length > 0) {
+      await prisma.task.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.leadEvent.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.interaction.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.lead.deleteMany({ where: { id: { in: leadIds } } });

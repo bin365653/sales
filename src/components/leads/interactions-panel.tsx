@@ -116,7 +116,7 @@ export function InteractionsPanel({
   }
 
   return (
-    <section className="rounded-lg border border-gray-200 bg-white p-4">
+    <section id="interactions" className="rounded-lg border border-gray-200 bg-white p-4">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-900">
           沟通记录（{interactions.length} 条）
@@ -155,6 +155,7 @@ export function InteractionsPanel({
           <InteractionForm
             mode="create"
             leadId={leadId}
+            leadName={leadName}
             stages={stages}
             currentStageName={currentStageName}
             currentStageSortOrder={currentStageSortOrder}
@@ -189,6 +190,7 @@ export function InteractionsPanel({
           <InteractionForm
             mode="edit"
             leadId={leadId}
+            leadName={leadName}
             interactionId={editing.id}
             stages={stages}
             currentStageName={currentStageName}
