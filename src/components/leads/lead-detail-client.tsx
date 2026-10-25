@@ -12,6 +12,10 @@ import {
   type LeadPriority,
 } from "@/lib/format";
 import { LeadForm } from "@/components/leads/lead-form";
+import {
+  InteractionsPanel,
+  type InteractionView,
+} from "@/components/leads/interactions-panel";
 import type { FieldDefRow } from "@/lib/lead-form-fields";
 
 // 客户详情交互壳（P5，T04）：查看（画像+时间线）/ 编辑切换、阶段流转、软删除。
@@ -62,6 +66,15 @@ export interface LeadDetailClientProps {
   timeline: TimelineItem[];
   fieldDefs: FieldDefRow[];
   stages: { id: string; name: string }[];
+  /** 启用中的阶段（含语义锚点与排序），供沟通表单展示 K4 推进提示 */
+  stageOptions: {
+    id: string;
+    name: string;
+    sortOrder: number;
+    semanticKey: string | null;
+  }[];
+  currentStageSortOrder: number;
+  interactions: InteractionView[];
   formValues: Record<string, string | number | boolean | null>;
 }
 
@@ -81,6 +94,9 @@ export function LeadDetailClient({
   timeline,
   fieldDefs,
   stages,
+  stageOptions,
+  currentStageSortOrder,
+  interactions,
   formValues,
 }: LeadDetailClientProps) {
   const router = useRouter();
@@ -377,11 +393,16 @@ export function LeadDetailClient({
             </ol>
           </section>
 
-          {/* 沟通历史 / 任务 / AI 面板：随 T06 / T07 / T09 交付 */}
+          {/* 沟通记录（T06 交付）；任务 / AI 面板随 T07 / T09 交付 */}
+          <InteractionsPanel
+            leadId={lead.id}
+            leadName={lead.name}
+            currentStageName={lead.stageName}
+            currentStageSortOrder={currentStageSortOrder}
+            stages={stageOptions}
+            interactions={interactions}
+          />
           <div className="flex flex-wrap gap-3 text-sm text-gray-400">
-            <span className="rounded-md border border-dashed border-gray-300 px-3 py-1.5">
-              沟通记录（T06）
-            </span>
             <span className="rounded-md border border-dashed border-gray-300 px-3 py-1.5">
               任务列表（T07）
             </span>

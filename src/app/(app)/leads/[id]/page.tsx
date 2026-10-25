@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import type { Lead } from "@prisma/client";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { getLeadDetail } from "@/server/services/leads";
+import { listInteractions } from "@/server/services/interactions";
 import { listFieldDefs } from "@/server/services/lead-fields";
 import { listStages } from "@/server/services/stages";
 import { getUserNames } from "@/server/services/users";
@@ -20,14 +21,18 @@ import {
   type FieldDefRow,
 } from "@/lib/lead-form-fields";
 import type { FieldOption } from "@/lib/lead-field-validation";
+import {
+  InteractionAuditEntry,
+  InteractionView,
+} from "@/components/leads/interactions-panel";
 import { LeadDetailClient } from "@/components/leads/lead-detail-client";
 
 export const dynamic = "force-dynamic";
 
 // P5 客户详情（T04）：画像全部字段 + 核实状态徽标 + 阶段时间线（lead_events）。
 // 服务端完成全部数据整形（时间/文案/字段名映射），客户端组件只负责
-// 查看/编辑切换、阶段流转与删除的交互。沟通历史/AI 面板/任务列表
-// 分别随 T06/T09/T07 交付。
+// 查看/编辑切换、阶段流转与删除的交互。沟通记录区块随 T06 交付；
+// AI 面板/任务列表分别随 T09/T07 交付。
 
 interface StageSnapshotEntryLike {
   id: string;
@@ -57,11 +62,15 @@ function asSnapshot(raw: unknown): {
   return raw as { from?: StageSnapshotEntryLike; to?: StageSnapshotEntryLike };
 }
 
-function asDetail(raw: unknown): { fields?: unknown[]; batch?: boolean } | null {
+function asDetail(raw: unknown): {
+  fields?: unknown[];
+  batch?: boolean;
+  reason?: string;
+} | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
   }
-  return raw as { fields?: unknown[]; batch?: boolean };
+  return raw as { fields?: unknown[]; batch?: boolean; reason?: string };
 }
 
 function optionsOf(def: FieldDefRow): FieldOption[] {
@@ -88,14 +97,17 @@ export default async function LeadDetailPage({
   }
   const { id } = await params;
 
-  let detail: { lead: Lead & { stage: { id: string; name: string } }; events: EventRow[] };
+  let detail: {
+    lead: Lead & { stage: { id: string; name: string; sortOrder: number } };
+    events: EventRow[];
+  };
   try {
     detail = (await getLeadDetail(user, id)) as typeof detail;
   } catch {
     notFound();
   }
 
-  const [defs, stages, actorNames] = await Promise.all([
+  const [defs, stages, actorNames, interactions] = await Promise.all([
     listFieldDefs({ activeOnly: false }),
     listStages({ activeOnly: true }),
     getUserNames(
@@ -103,7 +115,48 @@ export default async function LeadDetailPage({
         .map((event) => event.actorId)
         .filter((actorId): actorId is string => actorId !== null),
     ),
+    listInteractions(user, id),
   ]);
+
+  const interactionRows: InteractionView[] = interactions.map((row) => ({
+    id: row.id,
+    occurredAtDisplay: toShanghaiDateTimeString(row.occurredAt),
+    occurredAtInput: toDateTimeInputValue(row.occurredAt),
+    channel: row.channel,
+    direction: row.direction,
+    connected: row.connected,
+    effective: row.effective,
+    feedback: row.feedback,
+    confirmedPains: row.confirmedPains,
+    currentSystemConfirmed: row.currentSystemConfirmed,
+    purchaseTimeConfirmed: row.purchaseTimeConfirmed,
+    decisionMakerNote: row.decisionMakerNote,
+    objections: row.objections,
+    nextAction: row.nextAction,
+    nextContactAtDisplay: row.nextContactAt
+      ? toShanghaiDateTimeString(row.nextContactAt)
+      : null,
+    nextContactAtInput: row.nextContactAt
+      ? toDateTimeInputValue(row.nextContactAt)
+      : null,
+    isQualified: row.isQualified,
+    demoBooked: row.demoBooked,
+    userName: actorNames.get(row.userId) ?? null,
+    editAudit: (Array.isArray(row.editAudit) ? row.editAudit : []).map(
+      (entry): InteractionAuditEntry => {
+        const raw = entry as { at?: unknown; by?: unknown; changed?: unknown };
+        return {
+          at: typeof raw.at === "string" ? raw.at : "",
+          by: typeof raw.by === "string" ? raw.by : "",
+          byName: (typeof raw.by === "string" && actorNames.get(raw.by)) || null,
+          changed:
+            typeof raw.changed === "object" && raw.changed !== null
+              ? (raw.changed as InteractionAuditEntry["changed"])
+              : {},
+        };
+      },
+    ),
+  }));
   const fieldDefs: FieldDefRow[] = defs.map((def) => ({
     key: def.key,
     label: def.label,
@@ -224,7 +277,11 @@ export default async function LeadDetailPage({
           title = "阶段流转";
           detailText =
             snapshot?.from && snapshot?.to
-              ? `${snapshot.from.name} → ${snapshot.to.name}`
+              ? `${snapshot.from.name} → ${snapshot.to.name}${
+                  detailInfo?.reason === "interaction_advance"
+                    ? "（沟通记录联动）"
+                    : ""
+                }`
               : null;
           break;
         case "deleted":
@@ -292,6 +349,14 @@ export default async function LeadDetailPage({
       timeline={timeline}
       fieldDefs={fieldDefs}
       stages={stages.map((stage) => ({ id: stage.id, name: stage.name }))}
+      stageOptions={stages.map((stage) => ({
+        id: stage.id,
+        name: stage.name,
+        sortOrder: stage.sortOrder,
+        semanticKey: stage.semanticKey,
+      }))}
+      currentStageSortOrder={lead.stage.sortOrder}
+      interactions={interactionRows}
       formValues={formValues}
     />
   );

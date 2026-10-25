@@ -137,14 +137,47 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   （detail 含批次 id/行号/文件名）+ `import.confirmed` 审计；批次终态 `confirmed`
   不可重复确认；确认时逐行复检（预览后字段配置变更 → recheckFailed 计数，不静默错导）。
 - **导出**：`POST /api/exports/leads`（按当前筛选，XLSX/CSV）+
-  `POST /api/exports/me`（个人全量 ZIP：客户 XLSX+CSV；沟通/任务/AI 记录随
-  T06–T08 落表后并入）+ `GET /api/exports/:id/download`（仅创建者可下载）。
+  `POST /api/exports/me`（个人全量 ZIP：客户 XLSX+CSV + 沟通记录.csv（T06 并入）；
+  任务/AI 记录随 T07–T08 落表后并入）+ `GET /api/exports/:id/download`（仅创建者可下载）。
   行集合 = 线索池列表同一 where 构造器（`buildLeadListWhere`），导出范围与列表
   口径由同一段代码保证；自定义字段列仅当导出结果中存在值时输出（含已停用字段）。
 - **导出安全**：`=` `+` `-` `@` 及制表符开头单元格统一加 `'` 前缀（公式注入转义，
   XLSX 与 CSV 同规则）；CSV 带 UTF-8 BOM；每用户 5 次/小时限流（429）+ 审计。
 - **越权**：导入批次与导出文件均归属创建者，他人访问/下载一律 404
   （`tests/integration/imports-flow.test.ts` / `exports.test.ts` 固化）。
+
+## 沟通记录（T06 交付）
+
+- **数据模型**（迁移 `*_t06_interactions`）：`interactions` 表 = PRD §5.6 字段全集
+  （渠道/方向/接通/有效 + 反馈、痛点、当前系统、采购时间、决策人、异议、
+  下一步、下次联系时间 + 合格/预约标记）；不存归属冗余列，可见性一律经线索归属
+  判定（§4.4，销售仅本人、管理员全量，越权 404）；`edit_audit` JSONB 承载修正审计。
+- **P5 沟通区块**（详情页 `InteractionsPanel`，新建/修正共用 `InteractionForm`）：
+  时间线列表（渠道·方向、有效/合格/预约徽章、"已修正 N 次"可展开审计）；
+  表单常驻 effective 定义文案（"获得有价值业务信息或明确下一步动作，仅接通不算"）
+  与方向字段（呼出/呼入，K5 呼出指标来源）。
+- **保存事务**（`POST /api/leads/:id/interactions`）：单事务完成 沟通记录 +
+  last_contact_at +（可选）next_contact_at + "本次确认"核实状态 + K4 条件推进阶段；
+  任一步失败整体回滚（集成测试强制线索行更新失败对账：记录不落库、版本不变）。
+- **K4 联动（C09）**：勾选合格/预约 → 自动推进至 qualified / booked_demo 锚点阶段。
+  仅当目标存在、启用且排序晚于当前（只进不退）；双勾选取更远目标、单条
+  stage_changed 事件（detail 记 `reason=interaction_advance` + triggers）；
+  表单按同规则实时展示推进提示。
+- **修正留痕（M11/M1）**：`PATCH /api/interactions/:id` 修正不改写历史，
+  `edit_audit` 追加 `{at, by, changed:{field:{from,to}}}`；无变化提交幂等
+  （不升版本、不追加审计）；不提供删除。
+- **边界语义**（细节）：
+  - `last_contact_at = max(既有, 本次)`：补录更早沟通不回退最近联系时间；
+  - `next_contact_at`：未填不改动既有计划；修正时仅当该记录仍是最新一条才同步；
+  - "本次确认"仅新建提供：单向把画像核实状态置为已确认（不改字段值），
+    修正表单不含此项；
+  - `occurred_at` 允许补录过去、拒绝未来（5 分钟容差）；effective 依赖 connected
+    （Schema 交叉校验，zod v4 的 refine 须在 omit 之后叠加）。
+- **个人全量导出并入**（M9 推进）：`POST /api/exports/me` ZIP 新增 `沟通记录.csv`
+  （含软删除客户的沟通；公式转义与 T05 同规则）；任务/AI 记录随 T07/T08。
+- **验收锚点**：`tests/unit/interaction-schemas.test.ts`（10 例）+
+  `tests/integration/interactions.test.ts`（14 例：事务副作用、K4 四态、
+  修正幂等、回滚对账、越权 404、列表排序）。
 
 ## 常用命令
 

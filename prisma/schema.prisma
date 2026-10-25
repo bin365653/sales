@@ -114,17 +114,17 @@ enum lead_field_type {
 }
 
 model LeadFieldDef {
-  id         String         @id @default(uuid(7)) @db.Uuid
-  key        String         @unique @db.VarChar(64)
-  label      String         @db.VarChar(64)
+  id         String          @id @default(uuid(7)) @db.Uuid
+  key        String          @unique @db.VarChar(64)
+  label      String          @db.VarChar(64)
   type       lead_field_type
-  options    Json?          @db.JsonB
-  validation Json?          @db.JsonB
-  isBuiltin  Boolean        @default(false) @map("is_builtin")
-  isActive   Boolean        @default(true) @map("is_active")
-  sortOrder  Int            @map("sort_order")
-  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  options    Json?           @db.JsonB
+  validation Json?           @db.JsonB
+  isBuiltin  Boolean         @default(false) @map("is_builtin")
+  isActive   Boolean         @default(true) @map("is_active")
+  sortOrder  Int             @map("sort_order")
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([isActive, sortOrder])
   @@map("lead_field_defs")
@@ -151,52 +151,53 @@ enum lead_priority {
 }
 
 model Lead {
-  id           String        @id @default(uuid(7)) @db.Uuid
+  id                   String        @id @default(uuid(7)) @db.Uuid
   // —— 基本信息（PRD §5.3）——
-  name         String        @db.VarChar(128)
-  city         String?       @db.VarChar(64)
-  industry     String?       @db.VarChar(64)
-  mainCategory String?       @map("main_category") @db.VarChar(128)
-  contactName  String?       @map("contact_name") @db.VarChar(64)
-  contactTitle String?       @map("contact_title") @db.VarChar(64)
-  contactPhone String?       @map("contact_phone") @db.VarChar(32)
-  source       String?       @db.VarChar(64)
-  salesTeamSize Int?         @map("sales_team_size")
-  revenueRange String?       @map("revenue_range") @db.VarChar(64)
-  salesMode    String?       @map("sales_mode") @db.VarChar(64)
+  name                 String        @db.VarChar(128)
+  city                 String?       @db.VarChar(64)
+  industry             String?       @db.VarChar(64)
+  mainCategory         String?       @map("main_category") @db.VarChar(128)
+  contactName          String?       @map("contact_name") @db.VarChar(64)
+  contactTitle         String?       @map("contact_title") @db.VarChar(64)
+  contactPhone         String?       @map("contact_phone") @db.VarChar(32)
+  source               String?       @db.VarChar(64)
+  salesTeamSize        Int?          @map("sales_team_size")
+  revenueRange         String?       @map("revenue_range") @db.VarChar(64)
+  salesMode            String?       @map("sales_mode") @db.VarChar(64)
   // —— 系统情况 ——
-  currentSystem        String?    @map("current_system") @db.VarChar(128)
-  systemModules        String?    @map("system_modules") @db.VarChar(255)
-  contractExpiry       DateTime?  @map("contract_expiry") @db.Date
-  knownPains           String?    @map("known_pains") @db.Text
-  consideringSwitch    Boolean?   @map("considering_switch")
+  currentSystem        String?       @map("current_system") @db.VarChar(128)
+  systemModules        String?       @map("system_modules") @db.VarChar(255)
+  contractExpiry       DateTime?     @map("contract_expiry") @db.Date
+  knownPains           String?       @map("known_pains") @db.Text
+  consideringSwitch    Boolean?      @map("considering_switch")
   // —— 采购情况 ——
-  hasClearDemand       Boolean?   @map("has_clear_demand")
-  purchaseTime         String?    @map("purchase_time") @db.VarChar(64)
-  budget               String?    @db.VarChar(64)
-  decisionMaker        String?    @map("decision_maker") @db.VarChar(128)
-  decisionProcess      String?    @map("decision_process") @db.VarChar(255)
-  mainConcerns         String?    @map("main_concerns") @db.Text
+  hasClearDemand       Boolean?      @map("has_clear_demand")
+  purchaseTime         String?       @map("purchase_time") @db.VarChar(64)
+  budget               String?       @db.VarChar(64)
+  decisionMaker        String?       @map("decision_maker") @db.VarChar(128)
+  decisionProcess      String?       @map("decision_process") @db.VarChar(255)
+  mainConcerns         String?       @map("main_concerns") @db.Text
   // —— 核实状态（未知/待核实/已确认，§4.3 四个关键事实字段）——
-  currentSystemStatus  fact_status @default(unknown) @map("current_system_status")
-  contractExpiryStatus fact_status @default(unknown) @map("contract_expiry_status")
-  purchaseTimeStatus   fact_status @default(unknown) @map("purchase_time_status")
-  decisionMakerStatus  fact_status @default(unknown) @map("decision_maker_status")
+  currentSystemStatus  fact_status   @default(unknown) @map("current_system_status")
+  contractExpiryStatus fact_status   @default(unknown) @map("contract_expiry_status")
+  purchaseTimeStatus   fact_status   @default(unknown) @map("purchase_time_status")
+  decisionMakerStatus  fact_status   @default(unknown) @map("decision_maker_status")
   // —— 管理组 ——
-  stageId       String         @map("stage_id") @db.Uuid
-  priority      lead_priority  @default(mid)
-  ownerId       String         @map("owner_id") @db.Uuid
-  lastContactAt DateTime?      @map("last_contact_at") @db.Timestamptz(6)
-  nextContactAt DateTime?      @map("next_contact_at") @db.Timestamptz(6)
-  remark        String?        @db.Text
-  customValues  Json?          @map("custom_values") @db.JsonB
-  dataVersion   Int            @default(1) @map("data_version")
-  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
-  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  stageId              String        @map("stage_id") @db.Uuid
+  priority             lead_priority @default(mid)
+  ownerId              String        @map("owner_id") @db.Uuid
+  lastContactAt        DateTime?     @map("last_contact_at") @db.Timestamptz(6)
+  nextContactAt        DateTime?     @map("next_contact_at") @db.Timestamptz(6)
+  remark               String?       @db.Text
+  customValues         Json?         @map("custom_values") @db.JsonB
+  dataVersion          Int           @default(1) @map("data_version")
+  deletedAt            DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  stage  LeadStage  @relation(fields: [stageId], references: [id])
-  events LeadEvent[]
+  stage        LeadStage     @relation(fields: [stageId], references: [id])
+  events       LeadEvent[]
+  interactions Interaction[]
 
   @@index([ownerId, deletedAt, stageId])
   @@index([ownerId, nextContactAt])
@@ -219,15 +220,15 @@ enum lead_event_type {
 }
 
 model LeadEvent {
-  id            String         @id @default(uuid(7)) @db.Uuid
-  leadId        String         @map("lead_id") @db.Uuid
-  actorId       String?        @map("actor_id") @db.Uuid
+  id            String          @id @default(uuid(7)) @db.Uuid
+  leadId        String          @map("lead_id") @db.Uuid
+  actorId       String?         @map("actor_id") @db.Uuid
   eventType     lead_event_type @map("event_type")
-  fromStageId   String?        @map("from_stage_id") @db.Uuid
-  toStageId     String?        @map("to_stage_id") @db.Uuid
-  stageSnapshot Json?          @map("stage_snapshot") @db.JsonB
-  detail        Json?          @db.JsonB
-  occurredAt    DateTime       @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  fromStageId   String?         @map("from_stage_id") @db.Uuid
+  toStageId     String?         @map("to_stage_id") @db.Uuid
+  stageSnapshot Json?           @map("stage_snapshot") @db.JsonB
+  detail        Json?           @db.JsonB
+  occurredAt    DateTime        @default(now()) @map("occurred_at") @db.Timestamptz(6)
 
   lead Lead @relation(fields: [leadId], references: [id])
 
@@ -260,17 +261,17 @@ enum import_decision {
 }
 
 model ImportBatch {
-  id         String        @id @default(uuid(7)) @db.Uuid
-  userId     String        @map("user_id") @db.Uuid
-  filename   String        @db.VarChar(255)
-  fileHash   String        @map("file_hash") @db.VarChar(64)
-  headers    Json?         @db.JsonB
-  mapping    Json?         @db.JsonB
-  status     import_status @default(pending)
-  counts     Json?         @db.JsonB
-  confirmedAt DateTime?    @map("confirmed_at") @db.Timestamptz(6)
-  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id          String        @id @default(uuid(7)) @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  filename    String        @db.VarChar(255)
+  fileHash    String        @map("file_hash") @db.VarChar(64)
+  headers     Json?         @db.JsonB
+  mapping     Json?         @db.JsonB
+  status      import_status @default(pending)
+  counts      Json?         @db.JsonB
+  confirmedAt DateTime?     @map("confirmed_at") @db.Timestamptz(6)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   rows ImportRow[]
 
@@ -279,17 +280,17 @@ model ImportBatch {
 }
 
 model ImportRow {
-  id        String          @id @default(uuid(7)) @db.Uuid
-  batchId   String          @map("batch_id") @db.Uuid
-  rowNo     Int             @map("row_no")
-  raw       Json            @db.JsonB
+  id         String          @id @default(uuid(7)) @db.Uuid
+  batchId    String          @map("batch_id") @db.Uuid
+  rowNo      Int             @map("row_no")
+  raw        Json            @db.JsonB
   normalized Json?           @db.JsonB
-  errors    Json?           @db.JsonB
-  hasErrors Boolean         @default(false) @map("has_errors")
-  dupType   import_dup_type @default(none) @map("dup_type")
-  dupLeadId String?         @map("dup_lead_id") @db.Uuid
-  dupRowNo  Int?            @map("dup_row_no")
-  decision  import_decision @default(skip) @map("decision")
+  errors     Json?           @db.JsonB
+  hasErrors  Boolean         @default(false) @map("has_errors")
+  dupType    import_dup_type @default(none) @map("dup_type")
+  dupLeadId  String?         @map("dup_lead_id") @db.Uuid
+  dupRowNo   Int?            @map("dup_row_no")
+  decision   import_decision @default(skip) @map("decision")
 
   batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
@@ -318,4 +319,55 @@ model ExportFile {
   @@index([userId, createdAt])
   @@index([expiresAt])
   @@map("export_files")
+}
+
+// ---------- 沟通记录（T06，实施计划 §4.2 interactions / PRD §5.6） ----------
+// 只追加 + 修正留痕（M11/M1）：不提供删除；修正不改写原值，
+// edit_audit 追加 {at, by, changed:{field:{from,to}}}（谁、何时、改了什么）。
+// direction 为 §5.9 呼出指标来源（K5/C08）；effective 判定按 PRD 统一定义
+// 在表单文案中固化（"获得有价值业务信息或明确下一步动作，仅接通不算"）。
+// 可见性经线索归属判定（§4.4）：本表不存 owner 冗余列，读写一律 JOIN leads 过滤。
+
+enum interaction_channel {
+  phone
+  wechat
+  visit
+  other
+}
+
+enum interaction_direction {
+  outbound
+  inbound
+}
+
+model Interaction {
+  id                     String                @id @default(uuid(7)) @db.Uuid
+  leadId                 String                @map("lead_id") @db.Uuid
+  userId                 String                @map("user_id") @db.Uuid
+  occurredAt             DateTime              @map("occurred_at") @db.Timestamptz(6)
+  channel                interaction_channel
+  direction              interaction_direction
+  connected              Boolean
+  effective              Boolean
+  // —— 沟通结果（PRD §5.6，全部可空）——
+  feedback               String?               @map("feedback") @db.Text
+  confirmedPains         String?               @map("confirmed_pains") @db.Text
+  currentSystemConfirmed String?               @map("current_system_confirmed") @db.VarChar(128)
+  purchaseTimeConfirmed  String?               @map("purchase_time_confirmed") @db.VarChar(64)
+  decisionMakerNote      String?               @map("decision_maker_note") @db.VarChar(255)
+  objections             String?               @db.Text
+  // —— 结论与下一步 ——
+  nextAction             String?               @map("next_action") @db.VarChar(255)
+  nextContactAt          DateTime?             @map("next_contact_at") @db.Timestamptz(6)
+  isQualified            Boolean               @default(false) @map("is_qualified")
+  demoBooked             Boolean               @default(false) @map("demo_booked")
+  // —— 修正审计（M11）：追加式数组，不覆盖历史条目 ——
+  editAudit              Json?                 @map("edit_audit") @db.JsonB
+  createdAt              DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  lead Lead @relation(fields: [leadId], references: [id])
+
+  @@index([leadId, occurredAt])
+  @@map("interactions")
 }
