@@ -26,6 +26,7 @@ export function LeadFilters({ query, stages, owners }: LeadFiltersProps) {
     Boolean(query.currentSystem) ||
     Boolean(query.stageId) ||
     Boolean(query.priority) ||
+    Boolean(query.nextContact) ||
     Boolean(query.ownerId);
 
   return (
@@ -99,6 +100,20 @@ export function LeadFilters({ query, stages, owners }: LeadFiltersProps) {
               {label}
             </option>
           ))}
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="q-next-contact" className="text-xs text-gray-500">
+          下次联系
+        </label>
+        <select
+          id="q-next-contact"
+          name="nextContact"
+          defaultValue={query.nextContact ?? ""}
+          className={INPUT_CLASS}
+        >
+          <option value="">不限</option>
+          <option value="today">今天（工作台「今日待联系」同口径）</option>
         </select>
       </div>
       {owners.length > 0 && (

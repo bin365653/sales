@@ -245,6 +245,8 @@ export const leadListQuerySchema = z.object({
   currentSystem: optionalFilter("在用系统"),
   stageId: uuidSchema.optional(),
   priority: z.enum(LEAD_PRIORITIES).optional(),
+  /** T12：工作台「今日待联系」卡预筛选——下次联系时间=今天（上海日界） */
+  nextContact: z.enum(["today"]).optional(),
   /** 仅管理员生效：按负责人筛选（销售强制限定本人，K1） */
   ownerId: uuidSchema.optional(),
 });

@@ -13,7 +13,11 @@ import {
   type StageAdvance,
 } from "@/server/services/interaction-write";
 import { insertTaskInTx } from "@/server/services/tasks";
-import { assertLeadReadable, assertLeadWritable } from "@/server/permissions";
+import {
+  assertLeadReadable,
+  assertLeadWritable,
+  leadReadScope,
+} from "@/server/permissions";
 
 // 沟通记录服务（T06，PRD §5.6 / K4 / M11）。
 // 关键不变量：
@@ -300,4 +304,47 @@ export async function listInteractions(
     where: { leadId },
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
   });
+}
+
+// ---------- 最近沟通（工作台 P2「最近沟通记录」，T12） ----------
+
+export interface RecentInteractionRow {
+  id: string;
+  leadId: string;
+  leadName: string;
+  occurredAt: Date;
+  channel: Interaction["channel"];
+  direction: Interaction["direction"];
+  connected: boolean;
+  effective: boolean;
+  feedback: string | null;
+}
+
+/**
+ * 数据范围内最新 N 条沟通（时间倒序）：销售=本人客户的沟通，
+ * 管理员=全量。可见性经线索归属判定（§4.4，同上）。
+ * 含软删除客户的沟通——沟通发生过就是发生过，与个人全量导出口径一致（M9）。
+ */
+export async function listRecentInteractions(
+  actor: AuthUser,
+  limit: number,
+): Promise<RecentInteractionRow[]> {
+  const scope = leadReadScope(actor);
+  const rows = await prisma.interaction.findMany({
+    where: scope.ownerId ? { lead: { ownerId: scope.ownerId } } : {},
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    take: limit,
+    include: { lead: { select: { name: true } } },
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    leadId: row.leadId,
+    leadName: row.lead.name,
+    occurredAt: row.occurredAt,
+    channel: row.channel,
+    direction: row.direction,
+    connected: row.connected,
+    effective: row.effective,
+    feedback: row.feedback,
+  }));
 }

@@ -73,7 +73,7 @@ export default async function AppLayout({
         <div className="mb-6 px-2 text-lg font-semibold">勤策</div>
         <NavList layout="sidebar" />
         <div className="mt-auto px-2 text-xs text-gray-400">
-          V1.0 · 工程实施计划 T11
+          V1.0 · 工程实施计划 T12
         </div>
       </aside>
 

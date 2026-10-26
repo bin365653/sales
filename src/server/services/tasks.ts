@@ -260,6 +260,38 @@ export async function listLeadTasks(
   return [...pending, ...finished];
 }
 
+// ---------- 今日/逾期计数（工作台卡片 T12 与任务中心同一实现） ----------
+
+/**
+ * 今日/逾期任务计数（上海日界，C13）：今日 = 截止日为今天的待处理；
+ * 逾期 = 待处理且截止日早于今天。工作台「今日任务/逾期任务」卡片（T12）
+ * 与任务中心 counts 字段共用本实现——口径必然一致。
+ */
+export async function getTaskCounts(
+  actor: AuthUser,
+  now: Date = new Date(),
+): Promise<{ today: number; overdue: number }> {
+  const todayStart = startOfShanghaiDay(0, now);
+  const tomorrowStart = startOfShanghaiDay(1, now);
+  const scope = leadReadScope(actor);
+  const leadFilter = scope.ownerId
+    ? { lead: { ownerId: scope.ownerId } }
+    : {};
+  const [today, overdue] = await Promise.all([
+    prisma.task.count({
+      where: {
+        ...leadFilter,
+        status: "pending",
+        dueAt: { gte: todayStart, lt: tomorrowStart },
+      },
+    }),
+    prisma.task.count({
+      where: { ...leadFilter, status: "pending", dueAt: { lt: todayStart } },
+    }),
+  ]);
+  return { today, overdue };
+}
+
 // ---------- 任务中心列表（GET /api/tasks 与 /tasks 页面共用同一实现） ----------
 
 export interface TaskListResult {
@@ -306,7 +338,7 @@ export async function listTasks(
       };
   }
 
-  const [items, total, todayCount, overdueCount] = await Promise.all([
+  const [items, total] = await Promise.all([
     prisma.task.findMany({
       where,
       include: {
@@ -318,25 +350,15 @@ export async function listTasks(
       take: query.pageSize,
     }),
     prisma.task.count({ where }),
-    // 工作台卡片口径（T12 同一实现）：今日任务 = 截止日为今天的待处理
-    prisma.task.count({
-      where: {
-        ...leadFilter,
-        status: "pending",
-        dueAt: { gte: todayStart, lt: tomorrowStart },
-      },
-    }),
-    prisma.task.count({
-      where: { ...leadFilter, status: "pending", dueAt: { lt: todayStart } },
-    }),
   ]);
+  const counts = await getTaskCounts(actor, now);
 
   return {
     items,
     total,
     page: query.page,
     pageSize: query.pageSize,
-    counts: { today: todayCount, overdue: overdueCount },
+    counts,
   };
 }
 

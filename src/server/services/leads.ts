@@ -4,6 +4,7 @@ import { ApiError } from "@/server/http/api";
 import { writeAudit } from "@/server/auth/audit";
 import { AuthUser } from "@/lib/auth";
 import { NEW_LEAD_STAGE_ANCHOR } from "@/lib/stages";
+import { startOfShanghaiDay } from "@/lib/tasks";
 import { findInactiveBuiltinKeys } from "@/lib/lead-field-validation";
 import { providedBuiltinKeys, parseShanghaiDate } from "@/lib/schemas/lead";
 import {
@@ -572,10 +573,12 @@ export async function softDeleteLead(actor: AuthUser, id: string): Promise<void>
  * 列表/导出共用的 where 构造器（唯一口径）：
  * 导出（T05）必须与列表查询走同一实现，保证"导出范围正确"不靠约定而靠同一段代码。
  * 销售的 ownerId 筛选参数无效（其范围已强制本人）；管理员按负责人筛选生效。
+ * options.now 供工作台汇总注入"今天"（默认当前时刻）。
  */
 export function buildLeadListWhere(
   actor: AuthUser,
   query: LeadListQuery,
+  options: { now?: Date } = {},
 ): Prisma.LeadWhereInput {
   const scope = leadReadScope(actor);
   const ownerIdFilter =
@@ -600,6 +603,16 @@ export function buildLeadListWhere(
     ...(query.currentSystem ? { currentSystem: query.currentSystem } : {}),
     ...(query.stageId ? { stageId: query.stageId } : {}),
     ...(query.priority ? { priority: query.priority } : {}),
+    // T12：「下次联系=今天」预筛选（上海日界；工作台「今日待联系」卡与
+    // 线索池共用本 where 构造器，口径必然一致）
+    ...(query.nextContact === "today"
+      ? {
+          nextContactAt: {
+            gte: startOfShanghaiDay(0, options.now),
+            lt: startOfShanghaiDay(1, options.now),
+          },
+        }
+      : {}),
   };
 }
 

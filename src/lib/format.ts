@@ -84,3 +84,59 @@ export const PRIORITY_BADGE_CLASS: Record<LeadPriority, string> = {
   mid: "bg-blue-50 text-blue-700",
   low: "bg-gray-100 text-gray-500",
 };
+
+// ---------- 工作台展示辅助（T12，P2） ----------
+
+const WEEKDAY_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+/** 上海日历日的星期文案（"周一"…"周日"） */
+export function shanghaiWeekdayLabel(date: Date): string {
+  const dayString = toShanghaiDateString(date);
+  const weekday = new Date(`${dayString}T00:00:00Z`).getUTCDay();
+  return WEEKDAY_LABELS[weekday] ?? "";
+}
+
+/**
+ * 相对时间文案（工作台「最近沟通记录」，UIUX P2"2小时前"）：
+ * <1 分钟"刚刚"；<1 小时"N 分钟前"；<24 小时"N 小时前"；
+ * <48 小时"昨天 HH:mm"；同年"MM-DD HH:mm"；跨年"YYYY-MM-DD HH:mm"。均为上海时区。
+ */
+export function formatRelativeShanghai(date: Date, now: Date): string {
+  const diffMs = now.getTime() - date.getTime();
+  const minuteMs = 60_000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  if (diffMs < minuteMs) {
+    return "刚刚";
+  }
+  if (diffMs < hourMs) {
+    return `${Math.floor(diffMs / minuteMs)} 分钟前`;
+  }
+  if (diffMs < dayMs) {
+    return `${Math.floor(diffMs / hourMs)} 小时前`;
+  }
+  if (diffMs < 2 * dayMs) {
+    const time = toShanghaiDateTimeString(date).slice(11);
+    return `昨天 ${time}`;
+  }
+  const full = toShanghaiDateTimeString(date);
+  const currentYear = toShanghaiDateString(now).slice(0, 4);
+  return full.slice(0, 4) === currentYear ? full.slice(5) : full;
+}
+
+/** 一句话摘要：拍平换行/多余空白并截断（工作台最近沟通、优先客户备注类展示） */
+export function oneLineSnippet(text: string | null, maxLength: number): string | null {
+  if (text === null) {
+    return null;
+  }
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat === "") {
+    return null;
+  }
+  // 按码点截断，避免中文/emoji 撕裂
+  const chars = Array.from(flat);
+  if (chars.length <= maxLength) {
+    return flat;
+  }
+  return `${chars.slice(0, maxLength).join("")}…`;
+}

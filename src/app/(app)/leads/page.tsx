@@ -31,6 +31,7 @@ function buildPageHref(query: LeadListQuery, page: number): string {
     currentSystem: query.currentSystem,
     stageId: query.stageId,
     priority: query.priority,
+    nextContact: query.nextContact,
     ownerId: query.ownerId,
   })) {
     if (value) {
@@ -95,6 +96,7 @@ export default async function LeadsPage({
           <h1 className="text-xl font-semibold">线索池</h1>
           <p className="mt-1 text-sm text-gray-500">
             共 {result.total} 位客户
+            {query.nextContact === "today" ? " · 下次联系：今天" : ""}
             {user.role === "admin" && query.ownerId
               ? ` · 负责人：${ownerNameById.get(query.ownerId) ?? "未知"}`
               : ""}
