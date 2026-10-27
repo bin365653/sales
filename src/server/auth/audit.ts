@@ -9,6 +9,12 @@ export const AuditAction = {
   loginFailed: "auth.login_failed",
   logout: "auth.logout",
   passwordChanged: "auth.password_changed",
+  // 实验分组（T14）：生命周期动作 + 常规组 AI 拦截留痕（验收项"403 且留痕"）
+  experimentCreated: "experiment.created",
+  experimentUpdated: "experiment.updated",
+  experimentAssigned: "experiment.assigned",
+  experimentClosed: "experiment.closed",
+  aiControlGroupBlocked: "ai.control_group_blocked",
 } as const;
 
 export interface AuditEntry {

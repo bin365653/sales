@@ -10,6 +10,7 @@ import { getUserNames } from "@/server/services/users";
 import { listLeadAiRuns } from "@/server/ai/runner";
 import { getTodayUsage } from "@/server/ai/rate-limit";
 import { resolveActivePromptVersion } from "@/server/ai/prompt-registry";
+import { getRunningExperimentGroups } from "@/server/services/experiments";
 import { toAiRunView, type AiRunView } from "@/lib/ai-run-view";
 import type { RunTypeValue } from "@/lib/schemas/ai";
 import {
@@ -142,6 +143,10 @@ export default async function LeadDetailPage({
   }
 
   const now = new Date();
+  // 实验分组（T14）：进行中实验覆盖该线索时展示 GroupBadge；
+  // 常规组 → AI 面板替换为说明卡（前端隐藏入口 + 服务端 403 双防线）
+  const experimentGroups = await getRunningExperimentGroups([detail.lead.id]);
+  const experimentGroup = experimentGroups.get(detail.lead.id) ?? null;
   const taskViews = tasks.map((task) =>
     toTaskView(
       {
@@ -402,6 +407,7 @@ export default async function LeadDetailPage({
       aiRuns={aiRuns}
       aiUsage={aiUsage}
       activePromptVersions={activePromptVersions}
+      experimentGroup={experimentGroup}
     />
   );
 }

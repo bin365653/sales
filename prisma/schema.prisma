@@ -201,6 +201,7 @@ model Lead {
   interactions Interaction[]
   tasks        Task[]
   aiRuns       AiRun[]
+  experimentAssignments ExperimentAssignment[]
 
   @@index([ownerId, deletedAt, stageId])
   @@index([ownerId, nextContactAt])
@@ -555,4 +556,72 @@ model WorkTimeEntry {
   @@unique([userId, workDate])
   @@index([workDate])
   @@map("work_time_entries")
+}
+
+// ---------- 实验分组（T14，实施计划 §4.2 experiments / PRD §5.10 / M3、C04） ----------
+// 生命周期：draft（可改配置）→ assign 执行随机分组 → running（配置冻结，仅可关闭）
+// → closed（历史可查；常规组禁 AI 规则随关闭解除——T14 确认 UIUX P8 建议语义）。
+// 分组结果固定不可改（C04）：配置列在 running 后一律不可写；分组明细只追加。
+
+enum experiment_status {
+  draft
+  running
+  closed
+}
+
+enum experiment_group {
+  control
+  assisted
+}
+
+model Experiment {
+  id            String            @id @default(uuid(7)) @db.Uuid
+  name          String            @db.VarChar(64)
+  status        experiment_status @default(draft)
+  // —— 圈选条件（与看板圈选同语义：来源/行业精确 + 阶段当前快照 + 负责人）——
+  source        String?           @db.VarChar(64)
+  industry      String?           @db.VarChar(64)
+  stageId       String?           @map("stage_id") @db.Uuid
+  ownerId       String?           @map("owner_id") @db.Uuid
+  // AI 辅助组占比（10–90 整数百分比，默认 50，UIUX P8"可调 10–90"）
+  assistedRatio Int               @default(50) @map("assisted_ratio")
+  // 最小样本阈值（默认 50；任一组样本量 < 阈值 → "样本不足，暂不宜判断"，§5.10）
+  minSampleSize Int               @default(50) @map("min_sample_size")
+  // —— 执行分组留痕（M3：分组时间/规则/操作人；规则快照随每条 assignment 冗余）——
+  assignedAt    DateTime?         @map("assigned_at") @db.Timestamptz(6)
+  assignedBy    String?           @map("assigned_by") @db.Uuid
+  assignedCount Int?              @map("assigned_count")
+  closedAt      DateTime?         @map("closed_at") @db.Timestamptz(6)
+  createdBy     String            @map("created_by") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  assignments ExperimentAssignment[]
+
+  @@index([status, assignedAt])
+  @@map("experiments")
+}
+
+// 分组明细（PRD §5.10 逐条留痕：分组 ID/时间/规则/客户画像快照）。
+// lead_id 全局唯一——同一线索不可重复分组（T14 验收项；跨实验亦不可，避免
+// 两组效果互相污染）；实验为管理员创建的全局数据，无 owner 冗余列。
+// 指标计算经 leadId 直接聚合（含软删除客户——发生过就是发生过，与看板同口径）。
+
+model ExperimentAssignment {
+  id              String           @id @default(uuid(7)) @db.Uuid
+  experimentId    String           @map("experiment_id") @db.Uuid
+  leadId          String           @unique @map("lead_id") @db.Uuid
+  group           experiment_group
+  // 分组规则快照：圈选条件 + 分组比例 + 随机方式（"random"）+ 分组时间
+  ruleSnapshot    Json?            @map("rule_snapshot") @db.JsonB
+  // 客户基本画像快照（PRD §5.10"客户基本画像"：名称/城市/行业/来源/阶段等白名单）
+  profileSnapshot Json?            @map("profile_snapshot") @db.JsonB
+  assignedAt      DateTime         @map("assigned_at") @db.Timestamptz(6)
+  assignedBy      String           @map("assigned_by") @db.Uuid
+
+  experiment Experiment @relation(fields: [experimentId], references: [id])
+  lead       Lead       @relation(fields: [leadId], references: [id])
+
+  @@index([experimentId, group])
+  @@map("experiment_assignments")
 }

@@ -495,7 +495,7 @@ describe("视图组装：漏斗行/选项/实验对比接入位", () => {
     expect(view.funnelRows[0]!.value).toBe(4);
   });
 
-  it("实验对比为 T14 接入位（T13 恒 null），阶段下拉来自启用阶段", async () => {
+  it("无进行中实验时实验对比为 null（T14 语义），阶段下拉来自启用阶段", async () => {
     const view = await getAnalyticsDashboard(
       admin,
       analyticsQuerySchema.parse({ period: "week" }),

@@ -142,8 +142,9 @@ export async function createAiRun(
 ): Promise<AiRun> {
   const lead = await loadLeadForRun(input.leadId);
   assertLeadWritable(actor, lead.ownerId);
-  // 常规组拦截（T14 接入位）：在频控之前，拒绝不消耗每日额度
-  await assertAiAllowedForLead(lead.id);
+  // 常规组拦截（T14 实现）：在频控之前，拒绝不消耗每日额度、不落 run；
+  // 拦截写审计日志（ai.control_group_blocked）
+  await assertAiAllowedForLead(lead.id, actor);
   await assertQuota(actor.id);
 
   // 配置/提示词就绪才允许创建 run（fail fast，避免产生必然失败的 pending 行）；
@@ -293,8 +294,8 @@ export async function retryAiRun(
     throw new ApiError(409, "run_not_retryable", "仅失败/超时/格式异常的 AI 调用可重试");
   }
   assertLeadWritable(actor, previous.lead.ownerId);
-  // 重试同样过常规组 guard（T14 接入位）：分组后固定（C04），失败重试也不例外
-  await assertAiAllowedForLead(previous.leadId);
+  // 重试同样过常规组 guard（T14 实现）：分组后固定（C04），失败重试也不例外
+  await assertAiAllowedForLead(previous.leadId, actor);
   await assertQuota(actor.id);
 
   const endpoint = await getActiveEndpoint();

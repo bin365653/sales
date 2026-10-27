@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PRIORITY_BADGE_CLASS, PRIORITY_LABELS, type LeadPriority } from "@/lib/format";
+import type { ExperimentGroupValue } from "@/lib/experiments";
+import { GroupBadge } from "@/components/leads/group-badge";
 
 // 线索池表格 + 批量修改（P3，T04）。
 // 批量修改走 PATCH /api/leads/batch：白名单字段（优先级/阶段/来源/下次联系），
@@ -28,13 +30,15 @@ export interface LeadRow {
 export interface LeadsTableProps {
   rows: LeadRow[];
   stages: { id: string; name: string }[];
+  /** 实验分组（T14）：进行中实验覆盖的 lead → 组别；命中时名称旁带 GroupBadge */
+  experimentGroups?: Map<string, ExperimentGroupValue>;
 }
 
 function priorityBadge(priority: string): string {
   return PRIORITY_BADGE_CLASS[priority as LeadPriority] ?? "bg-gray-100 text-gray-500";
 }
 
-export function LeadsTable({ rows, stages }: LeadsTableProps) {
+export function LeadsTable({ rows, stages, experimentGroups }: LeadsTableProps) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchPriority, setBatchPriority] = useState("");
@@ -243,6 +247,12 @@ export function LeadsTable({ rows, stages }: LeadsTableProps) {
                   >
                     {row.name}
                   </Link>
+                  {/* 实验分组徽章（T14，UIUX §5）：实验进行中且该线索被覆盖时显示 */}
+                  {experimentGroups?.get(row.id) && (
+                    <span className="ml-1.5 inline-block align-middle">
+                      <GroupBadge group={experimentGroups.get(row.id)!} />
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-gray-600">{row.city ?? "—"}</td>
                 <td className="hidden px-3 py-2.5 text-gray-600 md:table-cell">

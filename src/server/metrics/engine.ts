@@ -103,14 +103,14 @@ function toDateOnly(value: string): Date {
 }
 
 /** 上海日历日 from 00:00（含）到 to 次日 00:00（不含）的 UTC 区间 */
-function periodInstantBounds(period: MetricsPeriod): { start: Date; end: Date } {
+export function periodInstantBounds(period: MetricsPeriod): { start: Date; end: Date } {
   const start = new Date(`${period.from}T00:00:00+08:00`);
   const end = new Date(`${shiftDateString(period.to, 1)}T00:00:00+08:00`);
   return { start, end };
 }
 
 /** 语义锚点 → 阶段 UUID 映射（seed 预置；缺失时该锚点恒计 0 而非报错） */
-async function loadAnchorStageMap(): Promise<Map<string, string>> {
+export async function loadAnchorStageMap(): Promise<Map<string, string>> {
   const stages = await prisma.leadStage.findMany({
     where: {
       semanticKey: {
@@ -133,13 +133,12 @@ async function loadAnchorStageMap(): Promise<Map<string, string>> {
  * (线索, 锚点阶段) 取最早进入时刻，落在 [start, end) 才计入——
  * 同一线索多次进出该阶段只计首次，不随反弹重复计数。
  */
-function firstEntryCounts(
+export function firstEntryCounts(
   events: { leadId: string; toStageId: string | null; occurredAt: Date }[],
   start: Date,
   end: Date,
   stageIdToAnchor: Map<string, string>,
-): Map<string, number> {
-  const firstEntry = new Map<string, Date>(); // key = `${leadId}:${anchor}`
+): Map<string, number> {  const firstEntry = new Map<string, Date>(); // key = `${leadId}:${anchor}`
   for (const event of events) {
     if (event.toStageId === null) {
       continue;

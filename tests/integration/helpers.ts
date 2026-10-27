@@ -133,12 +133,31 @@ export async function cleanupTestUsers(): Promise<void> {
       select: { id: true },
     });
     const leadIds = leads.map((lead) => lead.id);
+    // 1.0) 实验分组（T14）：experiment_assignments 对 lead/experiment 均为
+    //      RESTRICT 外键，必须先于线索删除；实验由测试管理员创建，一并回收
+    const experiments = await prisma.experiment.findMany({
+      where: { createdBy: { in: createdUserIds } },
+      select: { id: true },
+    });
+    const experimentIds = experiments.map((experiment) => experiment.id);
+    if (experimentIds.length > 0) {
+      await prisma.experimentAssignment.deleteMany({
+        where: { experimentId: { in: experimentIds } },
+      });
+      await prisma.experiment.deleteMany({
+        where: { id: { in: experimentIds } },
+      });
+    }
     if (leadIds.length > 0) {
       // ai_runs 引用线索（RESTRICT），先于线索删除（T08）
       await prisma.aiRun.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.task.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.leadEvent.deleteMany({ where: { leadId: { in: leadIds } } });
       await prisma.interaction.deleteMany({ where: { leadId: { in: leadIds } } });
+      // 兜底：挂在测试线索上但归属他人实验的分组明细（本套测试不产生，防御性）
+      await prisma.experimentAssignment.deleteMany({
+        where: { leadId: { in: leadIds } },
+      });
       await prisma.lead.deleteMany({ where: { id: { in: leadIds } } });
     }
   }

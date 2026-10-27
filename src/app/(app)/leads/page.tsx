@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/server/auth/current-user";
 import { listLeads } from "@/server/services/leads";
 import { listStages } from "@/server/services/stages";
 import { listActiveUsers } from "@/server/services/users";
+import { getRunningExperimentGroups } from "@/server/services/experiments";
 import { leadListQuerySchema, type LeadListQuery } from "@/lib/schemas/lead";
 import { toShanghaiDateString, toShanghaiDateTimeString } from "@/lib/format";
 import { LeadFilters } from "@/components/leads/lead-filters";
@@ -69,6 +70,10 @@ export default async function LeadsPage({
     listStages({ activeOnly: true }),
     user.role === "admin" ? listActiveUsers() : Promise.resolve([]),
   ]);
+  // 实验分组（T14）：进行中实验覆盖本页线索时的 lead → 组别映射（GroupBadge）
+  const experimentGroups = await getRunningExperimentGroups(
+    result.items.map((lead) => lead.id),
+  );
 
   const rows: LeadRow[] = result.items.map((lead) => ({
     id: lead.id,
@@ -130,6 +135,7 @@ export default async function LeadsPage({
       <LeadsTable
         rows={rows}
         stages={stages.map((stage) => ({ id: stage.id, name: stage.name }))}
+        experimentGroups={experimentGroups}
       />
 
       <div className="flex items-center justify-between text-sm text-gray-600">

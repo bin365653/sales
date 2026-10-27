@@ -6,10 +6,12 @@ import { isFunnelEmpty } from "@/lib/analytics";
 import { AnalyticsFilters } from "@/components/analytics/analytics-filters";
 import { FunnelSection } from "@/components/analytics/funnel";
 import { StageDistributionSection } from "@/components/analytics/stage-bars";
+import { ExperimentComparisonTable } from "@/components/analytics/comparison-table";
 import {
   EffectivePerHourValue,
   MetricDash,
 } from "@/components/analytics/metric-dash";
+import { EXPERIMENT_COMPARISON_METRICS } from "@/lib/experiments";
 
 export const dynamic = "force-dynamic";
 
@@ -129,16 +131,29 @@ export default async function AnalyticsPage({
 
       <StageDistributionSection rows={view.stageDistribution} />
 
-      {/* AI 组对比（PRD §5.10）：对比表组件与口径已随 T13 交付
-          （components/analytics/comparison-table.tsx + computeGroupComparison），
-          数据接入随 T14 实验分组交付 */}
-      <section className="rounded-lg border border-dashed border-gray-300 bg-white p-4">
-        <h2 className="mb-1 text-base font-semibold">AI 组对比</h2>
-        <p className="text-sm text-gray-500">
-          实验分组（常规组 / AI 辅助组）随实验管理交付后，此处展示两组的样本量、
-          比例、绝对差异与统计周期；样本不足时将显示「样本不足，暂不宜判断」。
-        </p>
-      </section>
+      {/* AI 组对比（PRD §5.10，T14 接入）：进行中实验 × 看板所选周期；
+          对比表组件与口径随 T13 交付，样本不足显示黄色横幅、绝无结论文案 */}
+      {view.experimentComparison ? (
+        <ExperimentComparisonTable
+          experimentName={view.experimentComparison.experimentName}
+          periodLabel={view.experimentComparison.periodLabel}
+          controlSampleSize={view.experimentComparison.controlSampleSize}
+          assistedSampleSize={view.experimentComparison.assistedSampleSize}
+          rows={view.experimentComparison.rows.map((row) => ({
+            metricLabel: row.metricLabel,
+            comparison: row.comparison,
+          }))}
+        />
+      ) : (
+        <section className="rounded-lg border border-dashed border-gray-300 bg-white p-4">
+          <h2 className="mb-1 text-base font-semibold">AI 组对比</h2>
+          <p className="text-sm text-gray-500">
+            当前没有进行中的实验。在「实验管理」创建实验并对线索随机分组后，
+            此处展示两组（常规组 / AI 辅助组）的样本量、比例、绝对差异与统计周期；
+            样本不足时将显示「样本不足，暂不宜判断」。
+          </p>
+        </section>
+      )}
 
       {/* 口径说明（折叠，PRD §5.9 原公式） */}
       <details className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600">
@@ -168,6 +183,17 @@ export default async function AnalyticsPage({
           <li>
             分母为 0 或缺工时显示「—」，绝不显示 0%。
           </li>
+          <li>
+            AI 组对比：样本量 = 分组时的组内线索数（固定）；比例 = 周期内达成该
+            指标的线索占组内样本比例（去重）；绝对差异 = AI 辅助组比例 − 常规组比例
+            （百分点）。任一组样本量 &lt; 实验阈值显示「样本不足，暂不宜判断」，
+            不构成 AI 造成提升的因果结论（§5.10）。
+          </li>
+          {EXPERIMENT_COMPARISON_METRICS.length > 0 && (
+            <li>
+              对比指标口径：{EXPERIMENT_COMPARISON_METRICS.map((metric) => `${metric.label}（${metric.basis}）`).join("；")}。
+            </li>
+          )}
         </ul>
       </details>
     </div>

@@ -14,7 +14,7 @@ const NAV_ITEMS: ReadonlyArray<{ label: string; href: string | null }> = [
   { label: "线索池", href: "/leads" },
   { label: "任务中心", href: "/tasks" },
   { label: "数据看板", href: "/analytics" },
-  { label: "实验管理", href: null },
+  { label: "实验管理", href: "/experiments" },
   // 设置中心随 T15 交付完整页签；T11 起先指向已交付的每日工时填报页
   { label: "设置中心", href: "/settings/worktime" },
 ];
@@ -73,7 +73,7 @@ export default async function AppLayout({
         <div className="mb-6 px-2 text-lg font-semibold">勤策</div>
         <NavList layout="sidebar" />
         <div className="mt-auto px-2 text-xs text-gray-400">
-          V1.0 · 工程实施计划 T13
+          V1.0 · 工程实施计划 T14
         </div>
       </aside>
 

@@ -62,6 +62,8 @@ export interface InteractionsPanelProps {
   aiPending?: boolean;
   /** 表单摘要 run 生命周期通知（与 AI 面板互斥） */
   onAiPendingChange?: (pending: boolean) => void;
+  /** 实验常规组（T14）：隐藏表单「AI 生成摘要」入口（服务端 403 兜底） */
+  aiDisabled?: boolean;
 }
 
 function auditValueText(value: unknown): string {
@@ -101,6 +103,7 @@ export function InteractionsPanel({
   interactions,
   aiPending = false,
   onAiPendingChange,
+  aiDisabled = false,
 }: InteractionsPanelProps) {
   const router = useRouter();
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
@@ -169,6 +172,7 @@ export function InteractionsPanel({
             currentStageSortOrder={currentStageSortOrder}
             aiPending={aiPending}
             onAiPendingChange={onAiPendingChange}
+            aiDisabled={aiDisabled}
             initial={{
               occurredAtInput: "",
               channel: "phone",

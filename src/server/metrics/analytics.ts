@@ -22,6 +22,10 @@ import {
 } from "@/server/metrics/engine";
 import { listActiveUsers } from "@/server/services/users";
 import { listStages } from "@/server/services/stages";
+import {
+  buildDashboardComparison,
+  type ExperimentComparisonView,
+} from "@/server/services/experiments";
 
 // 看板服务（T13，PRD §5.9 / UIUX P7）：周期解析 + 线索圈选 → 指标快照 +
 // 筛选选项组装。SSR /analytics 页与 GET /api/metrics 共用本实现（口径必然一致，
@@ -64,10 +68,11 @@ export interface AnalyticsDashboardView {
   stageName: string | null;
   ownerName: string | null;
   /**
-   * 实验对比数据（PRD §5.10）：T14 接入位——交付后在此返回两组统计，
-   * 页面渲染 P7 对比表（computeGroupComparison 纯函数已随 T13 固化）。
+   * 实验对比数据（PRD §5.10，T14 接入）：最近一个"进行中"实验 × 看板所选
+   * 周期的两组对比（经 computeGroupComparison，T13 固化口径）；
+   * 无进行中实验 → null（页面展示占位说明）。
    */
-  experimentComparison: null;
+  experimentComparison: ExperimentComparisonView | null;
   generatedAt: string;
 }
 
@@ -132,12 +137,15 @@ export async function getAnalyticsDashboard(
       : undefined,
   );
 
-  const [snapshot, cohortOptions, stages, owners] = await Promise.all([
-    computeMetricsSnapshot(user, period, cohort),
-    loadCohortOptions(user),
-    listStages({ activeOnly: true }),
-    isAdmin ? listActiveUsers() : Promise.resolve([]),
-  ]);
+  const [snapshot, cohortOptions, stages, owners, experimentComparison] =
+    await Promise.all([
+      computeMetricsSnapshot(user, period, cohort),
+      loadCohortOptions(user),
+      listStages({ activeOnly: true }),
+      isAdmin ? listActiveUsers() : Promise.resolve([]),
+      // P7 AI 组对比（T14）：进行中实验 × 看板所选周期（server/metrics/experiment 口径）
+      buildDashboardComparison(period, { now }),
+    ]);
 
   return {
     period,
@@ -166,7 +174,7 @@ export async function getAnalyticsDashboard(
       stages.find((stage) => stage.id === query.stageId)?.name ?? null,
     ownerName:
       owners.find((owner) => owner.id === ownerId)?.name ?? null,
-    experimentComparison: null,
+    experimentComparison,
     generatedAt: now.toISOString(),
   };
 }

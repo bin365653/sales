@@ -98,6 +98,8 @@ export interface InteractionFormProps {
   aiPending?: boolean;
   /** 本表单摘要 run 生命周期（发起/终态/卸载）通知父级，与面板互斥 */
   onAiPendingChange?: (pending: boolean) => void;
+  /** 实验常规组（T14）：隐藏「AI 生成摘要」入口（服务端 403 兜底） */
+  aiDisabled?: boolean;
 }
 
 export function InteractionForm({
@@ -113,6 +115,7 @@ export function InteractionForm({
   onCancel,
   aiPending = false,
   onAiPendingChange,
+  aiDisabled = false,
 }: InteractionFormProps) {
   const [connected, setConnected] = useState(initial.connected);
   const [effective, setEffective] = useState(initial.effective);
@@ -422,7 +425,8 @@ export function InteractionForm({
         </p>
       )}
 
-      {mode === "create" && (
+      {/* AI 摘要草稿（T10）：常规组（T14）隐藏入口——服务端 403 兜底 */}
+      {mode === "create" && !aiDisabled && (
         <div className="rounded-md border border-violet-100 bg-violet-50/60 px-3 py-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs leading-relaxed text-violet-700">

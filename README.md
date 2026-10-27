@@ -528,6 +528,88 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   对比表直接渲染 `ExperimentComparisonTable`；常规组禁 AI 的服务端拦截沿用
   T09 预留接入位（`assertAiAllowedForLead`，抛 403 ai_control_group）。
 
+## 实验分组与评估（T14 交付）
+
+- **范围口径**：P8 `/experiments` 页 + 实验端点（`POST/GET /api/experiments`、
+  `GET/PATCH /api/experiments/:id`、`GET/POST /api/experiments/:id/assign`、
+  `GET /api/experiments/:id/stats`）+ 常规组禁 AI guard 实现 + P7 看板
+  `experimentComparison` 填充 + GroupBadge（线索池/详情页）。验收锚点：
+  同一线索不可重复分组；常规组调 AI 返回 403 且留痕；阈值配置生效；
+  样本不足文案出现（实施计划 §9 T14）。
+- **数据模型（迁移 `*_t14_experiments`）**：`experiments`（名称/状态
+  draft→running→closed/圈选四条件/AI 辅助组占比 10–90 默认 50/最小样本阈值
+  默认 50/分组留痕 assigned_at+by+count）+ `experiment_assignments`（组别/
+  规则快照/客户画像快照）。**`lead_id` 全局唯一**——同一线索不可重复分组
+  （跨实验亦不可，避免两组效果互相污染；验收项由唯一约束兜底，服务层并发
+  冲突转 409 `experiment_lead_conflict`）；外键 RESTRICT——物理删线索前必须
+  先删分组明细（集成测试 helpers 与冒烟清扫均已适配，软删除不受影响）。
+- **生命周期与冻结（C04）**：草稿可改配置 → 执行分组后 running **配置冻结**
+  （改配置 409 `experiment_locked`，Schema 层拒绝"关闭+配置"混传——不静默
+  忽略哲学）→ 关闭后 409 `experiment_closed`。**关闭语义（T14 确认 UIUX P8
+  建议）**：停止分组效果——常规组禁 AI 规则随实验关闭而解除（guard 只拦
+  running），历史与统计保留可查。
+- **随机分组（M3）**：圈选（与看板同语义：来源/行业精确 + 阶段当前快照 +
+  负责人；**自动排除已分组线索**，预览返回 `alreadyGrouped` 说明）→
+  Fisher-Yates 洗牌（`node:crypto` randomInt）→ 按 AI 辅助组占比切分
+  （round，n≥2 时两侧各至少 1 条；`estimateSplit` 纯函数，预览=执行同一规则）。
+  事务内批量落明细（每条含规则快照 `method: random` + 画像快照白名单，PRD
+  §5.10 逐条留痕）并 draft→running；强确认文案由前端 window.confirm 承担。
+- **常规组禁 AI（K3）**：`assertAiAllowedForLead`（T09 预留位）查分组表——
+  lead 命中 **running 实验的 control 组**即抛 403 `ai_control_group` 并
+  **await 审计留痕**（`ai.control_group_blocked`，含实验 id/名称；验收项
+  "403 且留痕"）；调用位置在频控之前（发起与重试同拦，T09 契约不变）：
+  拒绝不落 ai_runs、不消耗每日额度。前端双防线：详情页 AI 面板整体替换为
+  说明卡（"该客户属于实验常规组…"，无任何入口）、沟通表单隐藏「AI 生成
+  摘要」；AI 辅助组入口照常。
+- **GroupBadge（UIUX §5）**：常规组 = 灰底白字、AI 辅助组 = 紫底白字（带
+  文字，与阶段紫不混淆）；进行中实验覆盖的线索在线索池名称旁与详情页头部
+  显示（`getRunningExperimentGroups` 一次查询整页）。
+- **实验统计（server/metrics/experiment，唯一口径）**：样本量 = 分组时组内
+  线索数（固定）；命中 = 统计周期内达成指标的**去重线索数**（区别于看板的
+  事件计数——UIUX 示例 37.5% = 9/24 条线索）；口径与看板同源：有效沟通
+  （interactions.effective，含软删除）、阶段类 = lead_events 首次进入语义
+  （复用 engine 的 `firstEntryCounts`）、AI 使用 = 成功 run（K3 决议）。
+  五指标行：有效沟通率/合格线索率/预约演示率/成交率/AI 使用率。比率/绝对
+  差异/样本不足标志一律经 T13 的 `computeGroupComparison`（勿重写口径）。
+- **P7 看板点亮**：`getAnalyticsDashboard.experimentComparison` 填充"最近一个
+  进行中实验 × 看板所选周期"的对比（`buildDashboardComparison`），渲染
+  `ExperimentComparisonTable`；无进行中实验回落占位说明；全链路无"提升
+  X%"结论文案（§5.10 红线）。P8 详情展开复用同一口径（周期 = 分组日 →
+  关闭日/今日，`GET /api/experiments/:id/stats`；未分组 409
+  `experiment_not_assigned`）。
+- **P8 页面**：列表（状态徽章/两组样本量/圈选条件）→ 创建（圈选 + 比例
+  10–90 + 阈值，保存草稿）→ 预览 → 强确认 → 执行 → 对比（含样本不足黄色
+  横幅 + 阈值标注）→ 关闭（确认"禁 AI 规则解除"）。名单（两组明细）仅管理
+  员可见；写操作（创建/改/分组/关闭）服务端 `assertAdmin` 兜底，销售只读。
+  导航「实验管理」指向 /experiments（T14 点亮）。
+- **审计**：`experiment.created/updated/assigned/closed` 四动作 +
+  `ai.control_group_blocked`（T02 审计表扩展，查询界面随 T15）。
+- **验收锚点**：`tests/unit/experiments.test.ts`（15 例：切分估算边界/对比行
+  UIUX 示例 +8.7pp 手工对账/与 computeGroupComparison 口径一致性/Schema
+  比例边界与混传拒绝）+ `tests/integration/experiments.test.ts`（4 例：生命
+  周期全链路含冻结 409 与重复分组 409/跨实验查重与唯一约束兜底/常规组
+  403 不落 run 不计数且审计留痕 + 关闭解除/stats 口径手工对账含 P7 填充与
+  样本不足标志）；T14 冒烟 51 项（`.verify/t14-smoke.cjs`：自建自清 + 启动
+  物理扫残留，实验链路 HTTP 黑盒——401/校验 400/预览=执行 4/4/冻结与关闭
+  语义/403 留痕/SSR GroupBadge 与说明卡/看板对比表与占位/metrics 字段）；
+  生产 HTTP 冒烟 t12=30/t13=59/最小闭环 50 项回归通过。
+- **踩坑记录（T14 新增）**：⑨Prisma schema 漏写 `@map`（experiments.stageId
+  → stage_id）时 migrate deploy 照样成功（迁移 SQL 手写 snake_case），但
+  Client 查询按驼峰找列报"column does not exist"——schema 与迁移需对照检查；
+  ⑩Zod v4 `.default()` 字段复用进另一 schema 的 shape 会让缺省键在 parse 后
+  带 default 值（update 形状须用无 default 的独立 shape，否则空对象/关闭请求
+  被误判为"提供了配置"）；⑪同毫秒批量创建的线索 `orderBy createdAt` 排序
+  不稳定，依赖顺序的测试须显式错开 createdAt；⑫`rng=()=>0` 的洗牌不是恒等
+  排列而是循环左移（Fisher-Yates j=floor(rng*(i+1))=0 恒成立）——固定切分
+  测试的 rng 需按 `k/(k+1)` 递减取值；⑬guard 的审计留痕若 fire-and-forget
+  （`void writeAudit`）会在"断言审计存在"时产生竞态，拦截路径须 await。
+- **给 T15 的约定**：审计查询页直接消费 `audit_logs` 现有结构
+  （T14 新增 5 个 action 前缀：`experiment.*` / `ai.control_group_blocked`，
+  detail 内含实验 id/名称，无敏感明文）；设置中心账号管理注意实验数据无
+  owner 冗余列（experiments.created_by 仅逻辑引用、无外键），停用管理员
+  不影响其创建实验的历史展示；P9 提示词/模型配置页沿用 T08 服务层。
+
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
@@ -584,7 +666,13 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
     交集筛选 → 比率显示"—"（tooltip 说明原因）而非 0%；按阶段筛选 →
     「各阶段客户数量」收窄为该阶段一行；管理员可见「负责人」筛选，销售不可见；
     「口径说明」展开核对 PRD §5.9 原公式；工作台数字与看板一致（同一指标引擎）。
-11. 右上角登出 → 再访问任意页面回到登录页。
+11. 实验分组与评估 `/experiments`（T14，管理员）：新建实验（来源圈选 + 阈值 3）→
+    对 8 条同来源客户「执行分组」→ 强确认后两组各 4 条 → 线索池/详情页出现
+    「常规组 / AI 辅助组」徽章；常规组详情页 AI 面板替换为说明卡且无 AI 入口
+    （直达 URL 调 AI 接口 → 403）；看板「AI 组对比」出现该实验（样本 4 < 默认
+    阈值 50 → 黄色横幅"样本不足，暂不宜判断"）；关闭实验后常规组徽章消失、
+    AI 入口恢复；重复执行分组 → 409。
+12. 右上角登出 → 再访问任意页面回到登录页。
 
 ## 常用命令
 

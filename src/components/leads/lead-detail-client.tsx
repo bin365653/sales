@@ -18,6 +18,11 @@ import {
 } from "@/components/leads/interactions-panel";
 import { TasksPanel } from "@/components/tasks/tasks-panel";
 import { AiPanelSection, type AiQuotaView } from "@/components/leads/ai-panel";
+import {
+  ControlGroupNoticeCard,
+  GroupBadge,
+} from "@/components/leads/group-badge";
+import type { ExperimentGroupValue } from "@/lib/experiments";
 import type { AiRunView } from "@/lib/ai-run-view";
 import type { RunTypeValue } from "@/lib/schemas/ai";
 import type { TaskView } from "@/components/tasks/task-view";
@@ -86,6 +91,8 @@ export interface LeadDetailClientProps {
   aiRuns: AiRunView[];
   aiUsage: AiQuotaView;
   activePromptVersions: Partial<Record<RunTypeValue, number | null>>;
+  /** 实验分组（T14）：进行中实验覆盖该线索时的组别；常规组隐藏全部 AI 入口 */
+  experimentGroup?: ExperimentGroupValue | null;
 }
 
 const SELECT_CLASS =
@@ -112,9 +119,13 @@ export function LeadDetailClient({
   aiRuns,
   aiUsage,
   activePromptVersions,
+  experimentGroup = null,
 }: LeadDetailClientProps) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
+  // 常规组（T14）：AI Tab 整体替换为说明卡，无任何 AI 入口（UIUX §4.7）；
+  // 互斥状态仍保留（沟通表单摘要入口同被隐藏）
+  const isControlGroup = experimentGroup === "control";
   const [targetStageId, setTargetStageId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -239,6 +250,8 @@ export function LeadDetailClient({
             优先级：
             {PRIORITY_LABELS[lead.priority as LeadPriority] ?? lead.priority}
           </span>
+          {/* 实验分组徽章（T14）：进行中实验覆盖该线索时显示（UIUX §4.6） */}
+          {experimentGroup && <GroupBadge group={experimentGroup} />}
         </div>
         <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
           <div>
@@ -420,6 +433,7 @@ export function LeadDetailClient({
             interactions={interactions}
             aiPending={aiRunInFlight}
             onAiPendingChange={setAiRunInFlight}
+            aiDisabled={isControlGroup}
           />
           {/* 任务区块（T07 交付）：待处理在前，完成弹窗=沟通结果+下一任务单事务 */}
           <TasksPanel
@@ -428,17 +442,21 @@ export function LeadDetailClient({
             stages={stageOptions}
             tasks={tasks}
           />
-          {/* AI 面板（T09 交付）：异步/轮询/失败重试/复制/历史；错误边界内，
-              AI 异常只影响面板自身（验收项）；与沟通表单摘要发起互斥（T10） */}
-          <AiPanelSection
-            leadId={lead.id}
-            leadName={lead.name}
-            initialRuns={aiRuns}
-            initialUsage={aiUsage}
-            activePromptVersions={activePromptVersions}
-            externalPending={aiRunInFlight}
-            onPendingChange={setAiRunInFlight}
-          />
+          {/* AI 面板（T09/T10）：常规组（T14）整体替换为说明卡——无任何 AI 入口
+              （UIUX §4.7），服务端 403 同文案兜底；非常规组保持原面板 */}
+          {isControlGroup ? (
+            <ControlGroupNoticeCard />
+          ) : (
+            <AiPanelSection
+              leadId={lead.id}
+              leadName={lead.name}
+              initialRuns={aiRuns}
+              initialUsage={aiUsage}
+              activePromptVersions={activePromptVersions}
+              externalPending={aiRunInFlight}
+              onPendingChange={setAiRunInFlight}
+            />
+          )}
         </>
       )}
     </div>
