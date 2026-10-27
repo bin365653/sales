@@ -4,6 +4,7 @@ import {
   EMPTY_FUNNEL_COUNTS,
   FunnelCounts,
   MetricRates,
+  MetricsPeriod,
 } from "@/lib/metrics";
 import {
   formatRelativeShanghai,
@@ -52,11 +53,25 @@ const FUNNEL_STAGE_ANCHORS = [
 // 平均处理时间的终点锚点（K5 ③：首次成为合格商机或关闭）
 const TERMINAL_STAGE_ANCHORS = ["qualified", "closed"] as const;
 
-export interface MetricsPeriod {
-  /** 上海日历日 YYYY-MM-DD（含） */
-  from: string;
-  /** 上海日历日 YYYY-MM-DD（含） */
-  to: string;
+// 周期类型下沉至纯函数层（lib/metrics），此处再导出保持既有引用不变
+export type { MetricsPeriod } from "@/lib/metrics";
+
+/**
+ * 线索圈选筛选（T13 看板，PRD §5.9"按客户来源、行业和客户阶段筛选"）。
+ * 语义：按线索属性圈定"同批线索"后计算全部指标——
+ * - 沟通/阶段事件/AI 调用：经线索归属过滤（含软删除客户——发生过就是发生过，
+ *   与 T12 无筛选口径一致）；
+ * - 各阶段客户数量：当前快照，本就不含软删除；
+ * - 工时（每小时有效沟通的分母）不挂在线索上，来源/行业/阶段圈选不影响分母；
+ *   但用户维度恒随"生效归属"：销售=本人、管理员按负责人筛选时=该负责人、
+ *   其余情况管理员=全量——工时属于人，不属于线索圈选维度。
+ * ownerId 仅管理员可用（销售强制本人，由 leadReadScope 兜底）。
+ */
+export interface MetricsCohortFilter {
+  source?: string;
+  industry?: string;
+  stageId?: string;
+  ownerId?: string;
 }
 
 export interface StageDistributionRow {
@@ -92,11 +107,6 @@ function periodInstantBounds(period: MetricsPeriod): { start: Date; end: Date } 
   const start = new Date(`${period.from}T00:00:00+08:00`);
   const end = new Date(`${shiftDateString(period.to, 1)}T00:00:00+08:00`);
   return { start, end };
-}
-
-function leadScopeFilter(user: AuthUser): { lead: { ownerId: string } } | object {
-  const scope = leadReadScope(user);
-  return scope.ownerId ? { lead: { ownerId: scope.ownerId } } : {};
 }
 
 /** 语义锚点 → 阶段 UUID 映射（seed 预置；缺失时该锚点恒计 0 而非报错） */
@@ -155,15 +165,33 @@ function firstEntryCounts(
 }
 
 /**
- * 全口径指标快照：给定用户数据范围与周期（上海日历日闭区间）。
+ * 全口径指标快照：给定用户数据范围、周期（上海日历日闭区间）与可选的
+ * 线索圈选筛选（T13 看板；不传 = 全量口径，与 T12 完全一致）。
  */
 export async function computeMetricsSnapshot(
   user: AuthUser,
   period: MetricsPeriod,
+  cohort: MetricsCohortFilter = {},
 ): Promise<MetricsSnapshot> {
   const { start, end } = periodInstantBounds(period);
   const scope = leadReadScope(user);
-  const scopeFilter = leadScopeFilter(user);
+
+  // 圈选 where（线索属性维度）：owner 维度销售恒为本人（cohort.ownerId 只对
+  // 管理员生效，与 buildLeadListWhere 同语义）；其余维度按传入值精确匹配。
+  // 不含 deletedAt——沟通/事件/AI"发生过就是发生过"，阶段分布另行排除软删除。
+  const cohortLeadWhere: Record<string, unknown> = {
+    ...(scope.ownerId
+      ? { ownerId: scope.ownerId }
+      : cohort.ownerId
+        ? { ownerId: cohort.ownerId }
+        : {}),
+    ...(cohort.source ? { source: cohort.source } : {}),
+    ...(cohort.industry ? { industry: cohort.industry } : {}),
+    ...(cohort.stageId ? { stageId: cohort.stageId } : {}),
+  };
+  const hasCohort = Object.keys(cohortLeadWhere).length > 0;
+  // 沟通/事件/AI 查询的线索归属过滤：无圈选时保持 T12 原 where（不引入空关联）
+  const leadRelationFilter = hasCohort ? { lead: cohortLeadWhere } : {};
 
   const anchorMap = await loadAnchorStageMap();
 
@@ -181,7 +209,7 @@ export async function computeMetricsSnapshot(
         occurredAt: { gte: start, lt: end },
         channel: "phone",
         direction: "outbound",
-        ...scopeFilter,
+        ...leadRelationFilter,
       },
     }),
     prisma.interaction.count({
@@ -190,14 +218,14 @@ export async function computeMetricsSnapshot(
         channel: "phone",
         direction: "outbound",
         connected: true,
-        ...scopeFilter,
+        ...leadRelationFilter,
       },
     }),
     prisma.interaction.count({
       where: {
         occurredAt: { gte: start, lt: end },
         effective: true,
-        ...scopeFilter,
+        ...leadRelationFilter,
       },
     }),
     // 首次进入语义需要周期之前的历史事件，故只设上界
@@ -206,14 +234,19 @@ export async function computeMetricsSnapshot(
         eventType: "stage_changed",
         occurredAt: { lt: end },
         toStageId: { in: Array.from(anchorMap.keys()) },
-        ...scopeFilter,
+        ...leadRelationFilter,
       },
       select: { leadId: true, toStageId: true, occurredAt: true },
     }),
     prisma.workTimeEntry.aggregate({
       where: {
         workDate: { gte: toDateOnly(period.from), lte: toDateOnly(period.to) },
-        ...(scope.ownerId ? { userId: scope.ownerId } : {}),
+        // 工时不挂线索：来源/行业/阶段圈选不影响分母（K5 分母=实际销售工作小时）；
+        // 用户维度恒随"生效归属"——销售=本人，管理员按负责人筛选时=该负责人，
+        // 其余情况管理员=全量。工时属于人，不属于线索圈选维度。
+        ...(scope.ownerId || cohort.ownerId
+          ? { userId: scope.ownerId ?? cohort.ownerId }
+          : {}),
       },
       _sum: { hours: true },
     }),
@@ -221,7 +254,7 @@ export async function computeMetricsSnapshot(
       by: ["stageId"],
       where: {
         deletedAt: null,
-        ...(scope.ownerId ? { ownerId: scope.ownerId } : {}),
+        ...cohortLeadWhere,
       },
       _count: { stageId: true },
     }),
@@ -273,6 +306,7 @@ export async function computeMetricsSnapshot(
     anchorMap,
     start,
     end,
+    cohortLeadWhere,
   );
 
   return {
@@ -285,7 +319,13 @@ export async function computeMetricsSnapshot(
     aiRunCount: await prisma.aiRun.count({
       where: {
         createdAt: { gte: start, lt: end },
-        ...(scope.ownerId ? { userId: scope.ownerId } : {}),
+        // 圈选时按线索归属过滤（管理员按负责人筛选同此路径）；
+        // 无圈选时保持 T12 口径（销售=本人发起，管理员=全量）
+        ...(hasCohort
+          ? { lead: cohortLeadWhere }
+          : scope.ownerId
+            ? { userId: scope.ownerId }
+            : {}),
       },
     }),
   };
@@ -294,12 +334,14 @@ export async function computeMetricsSnapshot(
 /**
  * 平均处理时间（K5 ③）：线索创建 → 首次成为合格商机或关闭。
  * 终态首次进入时间落在周期内的线索参与平均（天，1 位小数）；未到终态不进。
+ * cohortLeadWhere：看板圈选（T13）——圈选维度作用于同批线索的创建→终态配对。
  */
 async function computeAvgHandleTimeDays(
   user: AuthUser,
   anchorMap: Map<string, string>,
   start: Date,
   end: Date,
+  cohortLeadWhere: Record<string, unknown> = {},
 ): Promise<number | null> {
   const terminalStageIds = Array.from(anchorMap.entries())
     .filter(([, anchor]) =>
@@ -310,12 +352,16 @@ async function computeAvgHandleTimeDays(
     return null;
   }
 
+  // cohortLeadWhere 已含生效的归属过滤（销售=本人 / 管理员按负责人圈选）
+  const hasCohort = Object.keys(cohortLeadWhere).length > 0;
+  const leadRelationFilter = hasCohort ? { lead: cohortLeadWhere } : {};
+
   const events = await prisma.leadEvent.findMany({
     where: {
       eventType: "stage_changed",
       toStageId: { in: terminalStageIds },
       occurredAt: { lt: end },
-      ...leadScopeFilter(user),
+      ...leadRelationFilter,
     },
     select: { leadId: true, occurredAt: true },
   });
@@ -334,11 +380,10 @@ async function computeAvgHandleTimeDays(
     return null;
   }
 
-  const scope = leadReadScope(user);
   const leads = await prisma.lead.findMany({
     where: {
       id: { in: inPeriodLeadIds },
-      ...(scope.ownerId ? { ownerId: scope.ownerId } : {}),
+      ...cohortLeadWhere,
     },
     select: { id: true, createdAt: true },
   });

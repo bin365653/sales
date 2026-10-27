@@ -11,6 +11,14 @@
 
 // ---------- 漏斗计数（口径注解随字段，DB 聚合见 server/metrics/engine.ts） ----------
 
+/** 统计周期：上海日历日（YYYY-MM-DD）闭区间（C13；T12 引擎 / T13 看板共用） */
+export interface MetricsPeriod {
+  /** 起始日（含） */
+  from: string;
+  /** 结束日（含） */
+  to: string;
+}
+
 export interface FunnelCounts {
   /** 呼出电话数：channel=phone 且 direction=outbound 的沟通记录 */
   outboundCalls: number;

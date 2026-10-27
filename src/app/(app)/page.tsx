@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 // P2 工作台首页（T12，PRD §5.1 / UIUX P2）：优先呈现可执行动作而非图表。
 // 数据一律经 getWorkbenchSummary（与 GET /api/dashboard/summary 同一实现）：
 // 今日三卡 → /leads?nextContact=today 与任务中心；本周概览（C13 周一起算，
-// 看板随 T13 交付暂不跳转）；建议优先联系（K6 规则引擎，理由必显）；
+// T13 起整卡跳转看板并预设"本周"）；建议优先联系（K6 规则引擎，理由必显）；
 // 最近沟通记录（10 条，时间倒序）。
 
 const CARD_LINK_CLASS =
@@ -101,7 +101,10 @@ export default async function WorkbenchPage() {
           href="/tasks?view=overdue&status=pending"
           accent="danger"
         />
-        <div className="rounded-lg border border-gray-200 bg-white p-4">
+        <Link
+          href="/analytics?period=week"
+          className="block rounded-lg border border-gray-200 bg-white p-4 transition hover:border-blue-300 hover:shadow-sm"
+        >
           <div className="flex items-baseline justify-between">
             <div className="text-sm text-gray-500">本周概览</div>
             <span className="text-xs text-gray-400" title="周一起算（C13）">
@@ -114,10 +117,10 @@ export default async function WorkbenchPage() {
             <MetricCell label="合格" value={week.counts.qualifiedLeads} />
             <MetricCell label="预约" value={week.counts.demoBookings} />
           </div>
-          <div className="mt-1 text-right text-xs text-gray-400">
-            数据看板随 T13 交付
+          <div className="mt-1 text-right text-xs text-blue-600">
+            查看看板 →
           </div>
-        </div>
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
