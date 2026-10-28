@@ -693,12 +693,80 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   会话撤销语义（立即失效）是 T16 CSRF/会话固定用例的既定行为基线。
 
 
+## 安全加固（T16 交付）
+
+- **范围口径**：CSRF/Origin 校验、上传限制（10MB/5000 行/类型白名单）、
+  日志脱敏、导出限流、依赖审计；验收 = 渗透用例（越权/注入/超大文件/
+  恶意公式）全部通过（实施计划 §9 T16）。**无新迁移、无新增运行时依赖**。
+- **CSRF/Origin 防线 0（全面加固）**：middleware 对全部 API 写请求
+  （POST/PATCH/PUT/DELETE）统一 Origin 校验——纯函数 `isOriginAllowed`
+  （`src/lib/auth-guard.ts`，edge 安全）：无 Origin 放行（非浏览器客户端，
+  由 SameSite=Lax Cookie 兜底）；跨站 Origin / 非法 Origin（含 `Origin: null`）
+  → 403 `origin_forbidden`；反向代理场景按 `x-forwarded-host` 对比。
+  Route Handler 层 `assertSameOrigin` 重构为复用同一纯函数（双保险，
+  逐写端点校验自 T02 起保留，登录端点同样覆盖）。
+- **上传限制（M8 固化 + 一处实证修复）**：类型白名单（.xlsx/.csv）/ 10MB /
+  5000 行自 T05 解析层即已成立；T16 增加 Content-Length 预检（超大请求体在
+  缓冲前快败）。**发现并修复**：Next.js 15 对经过 middleware 的请求体有
+  10MB 硬截断（middlewareClientMaxBodySize 默认值），截断后 `formData()`
+  必然抛 TypeError，此前漏出为 500——现在"接近上限时的 FormData 解析失败"
+  映射为 400 `file_too_large`（与解析层同语义），其余映射 400
+  `invalid_request`。渗透用例：.exe → 400 unsupported_type；
+  11MB → 400 file_too_large；6000 行 → 400 row_limit。
+- **日志脱敏（`src/server/http/redact.ts`）**：`redactText`（password/token/
+  api_key/authorization 等键值形态 + 独立 Bearer 令牌掩码，值分支吞掉
+  Bearer 前缀避免半截掩码）、`redactValue`（结构化深脱敏：敏感键整键匹配、
+  循环引用安全、不改原对象）、`describeError`（错误 → 单行脱敏描述）。
+  接入点：`errorResponse` 未处理异常（不再整对象打日志）与审计写入失败告警。
+  审计表"不记敏感明文"仍由各写入侧保证（T02/T08/T15），本层兜住底层错误通道。
+- **导出限流（T05 语义 + 渗透固化）**：5 次/小时/用户（内存滑动窗口），
+  第 6 次 → 429 `rate_limited`。冒烟脚本规范随之固化：**新冒烟一律用自建
+  账号自己的配额**，不占 admin 共享配额（内存窗口跨多轮冒烟累计，
+  曾致最小闭环冒烟偶发 429——见踩坑⑰）。
+- **依赖审计（交付物记录）**：`npm audit --registry=https://registry.npmjs.org`
+  （npmmirror 未实现 audit 端点）：7 条通告（4 high / 3 moderate），全部为
+  传递依赖——prisma 6.19.3 → @prisma/config → deepmerge-ts（<8.0.0，栈耗尽，
+  构建 CLI 链路）、next 15.5.28 内置 postcss（≤8.5.22，构建期 CSS 处理，
+  输入为本工程第一方样式）、exceljs → uuid（<11.1.1，通告仅涉 v3/v5/v6 带
+  buf 参数场景）。`npm audit fix`（非 force）零改动：全部修复需破坏性大版本
+  （prisma 7 / next 16 / exceljs 3.4）。V1.0 决策：暂缓升级——三条均为构建期
+  或未启用路径，运行时暴露面极低；T18 交付前重新审计复核。
+- **渗透用例（`.verify/t16-smoke.cjs`，51 项，自建自清可重复执行）**：
+  - CSRF：跨站 Origin 写请求 403 / 登录端点同拦 / `Origin: null` 403 /
+    x-forwarded-host 不一致 403 / GET 不校验 / 同源写入放行；
+  - 越权：未登录 API 401 + 页面 307（next 只认站内路径，外站回落登录页）/
+    销售触管理员端点 403 / 直达管理员页签 404 / 他人线索读写 404；
+  - 注入：SQL 元字符客户名入库 201、按字面值检索命中、leads 表完好
+    （Prisma 参数化）；永真式串按字面搜索；
+  - 超大文件与白名单：三种拒绝（见上）；
+  - 恶意公式：`=HYPERLINK(...)` / `+SUM(...)` / `-1+1` / `@calc` 入库后
+    CSV 导出，四形态全部 `'` 前缀转义（R6，XLSX/CSV 同一规则）；
+  - 限流：导出窗口内第 6 次 429；登录同 IP+账号 5 次失败后 429
+    （用不存在的用户名锁定，不污染真实账号）；
+  - Cookie 标志：HttpOnly + SameSite=Lax（断言 Set-Cookie）。
+- **验收锚点**：`tests/unit/redact.test.ts`（10 例）+ `origin.test.ts` 扩展
+  （middleware 防线 0 判定 10 例；单元共 364 例）+ 集成 182 例回归 +
+  渗透冒烟 51 项；最小闭环 50 / t12=30 / t13=59 / t14=51 / t15=73（±1）
+  项回归通过。
+- **踩坑记录（T16 新增）**：⑯Next.js 15 对经过 middleware 的请求体按
+  middlewareClientMaxBodySize（默认 10MB）硬截断，截断后 `formData()` 抛
+  TypeError——大文件端点必须捕获并映射业务错误码，否则漏出 500；
+  ⑰内存限流器（登录/导出）窗口跨冒烟运行累计：同一服务进程内连跑多轮
+  冒烟会互相挤兑配额——冒烟脚本必须用自建账号自己的配额，复用型账号
+  （admin）只留给只读或低频断言。
+- **给 T17 的约定**：安全基线已就位——Origin 校验双层（middleware +
+  Route Handler）、Cookie HttpOnly+SameSite=Lax（生产 Secure 随 NODE_ENV）、
+  上传三限、导出/登录限流、日志脱敏；T17 部署文档的 Nginx 需透传
+  `X-Forwarded-Host`（Origin 校验依赖）与 `X-Forwarded-For`（限流/审计 IP）；
+  `.env.example` 交付清单在 T18 核对；依赖审计结论（见上）需在交付前复核一次。
+
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
 
 ```bash
-npm run test                # ① 单元测试（349 例，无需数据库）
+npm run test                # ① 单元测试（364 例，无需数据库）
 npm run test:integration    # ② 集成测试（182 例，需 PostgreSQL，见上文启动方式）
 npm run test:smoke          # ③ 最小闭环 E2E 冒烟（需先启动应用）
 ```

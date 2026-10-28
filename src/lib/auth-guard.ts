@@ -50,3 +50,42 @@ export function sanitizeNextPath(value: string | null | undefined): string | nul
   }
   return value;
 }
+
+// ---------- CSRF 防线 0（T16 全面加固：middleware 层 Origin 校验） ----------
+// Route Handler 层的 assertSameOrigin（T02 起逐写端点接入）仍是防线；
+// 本层在 middleware 统一兜底，堵住新增端点漏接的情形。
+
+const UNSAFE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+/** 是否为需要 Origin 校验的 API 写请求（GET/HEAD/OPTIONS 不校验） */
+export function isUnsafeApiWrite(pathname: string, method: string): boolean {
+  return (
+    (pathname === "/api" || pathname.startsWith("/api/")) &&
+    UNSAFE_METHODS.has(method.toUpperCase())
+  );
+}
+
+/**
+ * Origin 判定纯函数（与 assertSameOrigin 同一语义）：
+ * - 非浏览器客户端一般不带 Origin → 放行（由 SameSite=Lax Cookie 兜底）；
+ * - 浏览器跨站写请求带非本站 Origin → 拒绝（403）；
+ * - 经反向代理时按 x-forwarded-host 对比；Origin 头非法一律拒绝。
+ * 本函数必须保持零服务端依赖（edge middleware 可用）。
+ */
+export function isOriginAllowed(
+  origin: string | null | undefined,
+  forwardedHost: string | null | undefined,
+  host: string | null | undefined,
+): boolean {
+  if (!origin) {
+    return true;
+  }
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  const expected = forwardedHost || host;
+  return expected !== null && expected !== undefined && originHost === expected;
+}

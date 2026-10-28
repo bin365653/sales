@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
+import { describeError } from "@/server/http/redact";
 
 // 审计日志（实施计划 §4.2 audit_logs）：T02 记录登录成功/失败、登出、改密；
 // 查询界面随 T15 交付。不记密码与密钥等敏感明文。
@@ -49,10 +50,11 @@ export async function writeAudit(entry: AuditEntry): Promise<void> {
       },
     });
   } catch (error) {
+    // 审计失败只告警不阻断；日志经脱敏（T16），不带敏感值
     console.error(
       "[audit] 写入失败：",
       entry.action,
-      error instanceof Error ? error.message : error,
+      describeError(error),
     );
   }
 }

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AuthUser, SESSION_COOKIE } from "@/lib/auth";
+import { isOriginAllowed } from "@/lib/auth-guard";
 import { resolveSession } from "@/server/auth/session";
+import { describeError } from "@/server/http/redact";
 
 // Route Handler 公共层：统一错误结构、会话守卫、Origin 校验、客户端 IP 提取。
 
@@ -34,7 +36,8 @@ export function errorResponse(error: unknown): NextResponse {
       { status: 400 },
     );
   }
-  console.error("[api] 未处理异常：", error);
+  // 未处理异常只输出脱敏后的单行描述（T16 日志脱敏），不整对象打日志
+  console.error("[api] 未处理异常：", describeError(error));
   return NextResponse.json(
     { error: { code: "internal_error", message: "服务器内部错误" } },
     { status: 500 },
@@ -54,26 +57,19 @@ export async function requireUser(request: {
 }
 
 /**
- * 写请求 Origin 校验（CSRF 补充层，§6 统一约定 / §8.1；T16 全面加固）：
- * 浏览器跨站请求会带非本站 Origin → 403；非浏览器客户端一般不带 Origin，放行，
- * 由 SameSite=Lax Cookie 兜底。
+ * 写请求 Origin 校验（CSRF 补充层，§6 统一约定 / §8.1）：
+ * 判定与 middleware 防线 0 共用 isOriginAllowed 纯函数（T16 全面加固：
+ * middleware 对全部 API 写请求兜底，本函数在 Route Handler 层双保险）。
  */
 export function assertSameOrigin(request: {
   headers: { get(name: string): string | null };
 }): void {
-  const origin = request.headers.get("origin");
-  if (!origin) {
-    return;
-  }
-  const host =
-    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-  let originHost: string;
-  try {
-    originHost = new URL(origin).host;
-  } catch {
-    throw new ApiError(403, "origin_forbidden", "请求来源不被允许");
-  }
-  if (!host || originHost !== host) {
+  const allowed = isOriginAllowed(
+    request.headers.get("origin"),
+    request.headers.get("x-forwarded-host"),
+    request.headers.get("host"),
+  );
+  if (!allowed) {
     throw new ApiError(403, "origin_forbidden", "请求来源不被允许");
   }
 }
