@@ -116,11 +116,8 @@ async function main(): Promise<void> {
   try {
     // ---- ① 核心表行数比对（restore-drill.md 核对项 1）----
     const [cs, ct] = await Promise.all([tableCounts(s), tableCounts(t)]);
-    let countMismatches = 0;
     for (const table of Object.keys(cs) as Array<keyof typeof cs>) {
-      const ok = cs[table] === ct[table];
-      if (!ok) countMismatches += 1;
-      add("行数", table, ok, `${cs[table]} → ${ct[table]}`);
+      add("行数", table, cs[table] === ct[table], `${cs[table]} → ${ct[table]}`);
     }
 
     // ---- ② 抽样数据校验（核对项 2：最新/最早线索 + 最新沟通/AI run/分组明细）----

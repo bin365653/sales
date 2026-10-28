@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "test:smoke": "node tests/e2e/minimal-loop.cjs",
+    "test:e2e": "playwright test",
     "test:all": "npm run test && npm run test:integration",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -43,6 +44,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.0.0",
     "@types/papaparse": "^5.5.2",

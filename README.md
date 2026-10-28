@@ -831,6 +831,62 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   复核在 T18 交付前执行并记录结论。
 
 
+## 端到端验收与交付文档（T18 交付）
+
+- **范围口径**：Playwright 核心闭环 E2E、交付文档套件（启动/部署/备份/
+  口径/操作手册）、`.env.example` 交付清单核对、已知问题清单；验收 =
+  E2E 类生产环境全绿 + PRD §10 交付物清单逐项核对（`docs/delivery-checklist.md`，
+  附 §9 验收标准对照与签核栏）。**无新迁移；新增 devDependency 仅
+  `@playwright/test`**（Chromium 经 `npx playwright install chromium` 安装）。
+- **Playwright E2E（`tests/e2e/core-loop.spec.ts`，50 项 expect 断言）**：
+  登录（未登录重定向）→ 导入（上传/自动映射/预览三栏/错误行保护/确认汇总）
+  → 详情（画像+时间线）→ AI（客户分析 8 分区 + 电话准备卡 6 分区 + 历史
+  折叠展开 + 复制按钮）→ 沟通记录（AI 摘要草稿回填值断言 + 已接通/有效/
+  合格勾选 + K4 推进提示 + 同建任务 + 保存后「✦ AI 草稿确认」）→ 任务中心
+  （全部视图 → 完成弹窗：沟通结果 + 创建下一步任务单事务 → 完成时间展示）
+  → 看板（漏斗 8 行固定行序 + 四项比率 + 每小时有效沟通 + AI 使用）
+  → 退出登录（会话撤销后受保护页回到登录页）。选择器全部用可访问性语义
+  （getByLabel/getByRole/文案），与界面文案同源——**改文案须同步 spec**。
+- **类生产环境（playwright.config.ts 双 webServer）**：①Mock AI Provider
+  （`tests/e2e/mock-ai-server.cjs`，OpenAI 兼容 /chat/completions，按 system
+  提示词关键词分发三种 runType 的固定输出，结构对齐 `validator.ts` 的 Zod
+  Schema，AI 请求走真实 Provider→Runner→Validator 链路）；②应用 = 独立
+  数据库 `qince_e2e` 每次重建（`prepare-db.cjs`：DROP WITH FORCE → CREATE →
+  `migrate deploy` → `seed`）+ **生产构建** `next start`（:3100）；③
+  `global-setup.ts` 经真实 API 登录管理员并创建启用模型配置——**密钥走应用侧
+  AES-256-GCM 加密链路，E2E 不直插数据库**。运行 `npm run test:e2e`
+  （前置：PostgreSQL 已启动 + `npm run build` 产物存在）。
+- **交付文档四件**：`docs/operations.md`（操作手册：账号/线索池/导入导出/
+  详情/沟通/任务/AI/工时/看板实验/备份恢复入口）、`docs/metrics.md`
+  （口径手册：C13 时区、圈选语义、沟通类/阶段类/效率指标口径、首次进入
+  语义、软删除口径、分母 0 "—"红线（C03）、实验对比口径与"不输出提升 X%"
+  红线、实现锚点）、`docs/known-issues.md`（依赖审计结论/设计内取舍 12 项/
+  环境注意 6 项/迭代候选 8 项）、`docs/delivery-checklist.md`（PRD §10
+  十一项逐项映射交付物与验收锚点 + §9 验收标准对照 + 签核栏）。
+- **`.env.example` 交付清单核对（兑现 T17 约定）**：扫描 `process.env.*`
+  全量消费点确认应用变量集（ADMIN_*/AI_DAILY_LIMIT/APP_ENCRYPTION_KEY/
+  NODE_ENV + DATABASE_URL），**补齐 POSTGRES_USER/PASSWORD/DB 三项**
+  （生产 compose `${VAR:?}` 必填项此前缺失）；备份/告警/加密部署侧配置
+  明确指向 `backup.env.example`、不进应用 `.env`。
+- **依赖审计复核（兑现 T16 约定）**：`npm audit`（官方源）复核 = 7 条
+  （4 high / 3 moderate）与 T16 首审一致，全部传递依赖（prisma→config→
+  deepmerge-ts / next 内置 postcss / exceljs→uuid），修复均需破坏性大版本，
+  V1.0 维持暂缓决策；复核结论已写入 `docs/known-issues.md` §1。
+- **验收锚点**：E2E 核心闭环 1 场景 50 断言全绿（本机类生产环境 12.4s）；
+  回归 lint / typecheck / 单测 364 / 集成 182 / 冒烟最小闭环 50 / t12=30 /
+  t13=59 / t14=51 / t15=73 / t16=50（±1 动态计数）全部通过。
+  **环境偏差说明**：本机无 Docker——"类生产（Docker Compose）"以生产构建
+  `next start` + 独立 PostgreSQL 16 等价实现；compose 一键链路（容器入口
+  自动迁移+seed）为 T01 已验收项，云端部署时按 `docs/deploy.md` 首跑验证
+  （`docs/known-issues.md` §3 已列）。
+- **踩坑记录（T18 新增）**：⑲**进程环境变量优先于 `.env` 文件**（Next.js 与
+  `dotenv/config` 均不覆盖已存在的 process env）——E2E 借此用同一仓库跑
+  独立数据库（shell 注入 `DATABASE_URL` 覆盖 `.env` 的开发库地址）；
+  反向推论：想让 `.env` 生效必须确保变量未在 shell 中导出。
+- **V1.0 收官**：T01–T18 全部交付完毕。遗留动作：本地提交 T08–T18 待推送
+  GitHub；后续迭代按 `docs/known-issues.md` §4 候选清单立项。
+
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
@@ -914,6 +970,7 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
 | `npm run test` | Vitest 单元测试（无需数据库） |
 | `npm run test:integration` | 集成测试（需先启动 PostgreSQL，见上） |
 | `npm run test:smoke` | 最小闭环 E2E 冒烟（需先启动应用，见「最小闭环验收」） |
+| `npm run test:e2e` | Playwright 核心闭环 E2E（类生产：自动重建独立库 + `next start` + Mock AI；前置：PostgreSQL 已启动 + `npm run build` + `npx playwright install chromium`） |
 | `npm run test:all` | 单元 + 集成 |
 | `npm run db:migrate` | 创建并应用开发迁移（prisma migrate dev） |
 | `npm run db:deploy` | 应用已版本化的迁移（部署用，幂等） |
@@ -930,9 +987,12 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
 - `src/app/` —— 页面与 Route Handler（HTTP 层，薄）
 - `src/server/` —— 业务服务、权限、指标引擎、AI 适配层
 - `src/lib/` —— 前后端共享常量与工具（阶段语义锚点等）
-- `tests/` —— 单元 / 集成 / E2E 测试
+- `tests/` —— 单元 / 集成 / E2E 测试（`tests/e2e/` 含 Playwright 核心闭环
+  `core-loop.spec.ts` 与类生产环境脚本；根目录 `playwright.config.ts`）
 - `scripts/` —— 导入模板生成；`scripts/backup/` 备份/恢复/核验脚本与配置样例
-- `docs/` —— 部署文档（deploy.md）；`docs/ops/` 恢复演练记录归档
+- `docs/` —— 部署文档（deploy.md）、操作手册（operations.md）、口径手册
+  （metrics.md）、已知问题（known-issues.md）、交付物清单核对
+  （delivery-checklist.md）；`docs/ops/` 恢复演练记录归档
 - `deploy/` —— Nginx 反向代理 + HTTPS 配置样例
 - `docker-compose.yml` —— app + PostgreSQL 本地与云端同一套
 - `docker-compose.prod.yml` —— 生产编排（不映射 5432、app 仅回环、口令缺省拒启）

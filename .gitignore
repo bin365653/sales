@@ -40,3 +40,8 @@ scripts/backup/backup.env
 *.age
 age-identity*.txt
 
+# Playwright E2E 运行产物（T18）
+/test-results/
+/playwright-report/
+/blob-report/
+
