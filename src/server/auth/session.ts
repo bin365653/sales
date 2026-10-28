@@ -106,6 +106,17 @@ export async function revokeOtherUserSessions(
   });
 }
 
+/**
+ * 撤销该用户全部有效会话（T15：管理员重置密码/停用账号）。
+ * 返回原始 PrismaPromise，可与同事务的其他写操作合并（prisma.$transaction([...])）。
+ */
+export function revokeAllUserSessions(userId: string) {
+  return prisma.session.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+}
+
 // ---------- Cookie 写入（Route Handler 专用） ----------
 
 function cookieBase() {

@@ -7,6 +7,10 @@ export const RUN_TYPES = ["analysis", "call_prep", "interaction_summary"] as con
 
 export type RunTypeValue = (typeof RUN_TYPES)[number];
 
+/** 宽松 UUID 形态（zod v4 的 .uuid() 校验版本位，数据库自增/测试 id 会误伤） */
+const UUID_SHAPE_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const RUN_TYPE_LABELS: Record<RunTypeValue, string> = {
   analysis: "AI 客户分析",
   call_prep: "AI 电话准备卡",
@@ -122,6 +126,46 @@ export const modelConfigUpdateSchema = z
 /** 服务层入参用 input 形态（provider 带默认值，路由 parse 后与直调皆可） */
 export type ModelConfigCreateInput = z.input<typeof modelConfigCreateSchema>;
 export type ModelConfigUpdateInput = z.input<typeof modelConfigUpdateSchema>;
+
+// ---------- 测试连接（T15，UIUX P9 AI 服务页：发起最小请求回显成败） ----------
+// 两种形态二选一：configId（测试已保存配置，密钥服务端解密）；
+// 或 baseUrl+modelName+apiKey（测试表单新值，密钥未落库）。
+
+export const modelConnectionTestSchema = z
+  .object({
+    configId: z
+      .string()
+      .regex(UUID_SHAPE_RE, "配置标识不合法")
+      .optional(),
+    baseUrl: baseUrlSchema.optional(),
+    modelName: modelNameSchema.optional(),
+    apiKey: apiKeySchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.configId !== undefined) {
+      if (
+        value.baseUrl !== undefined ||
+        value.modelName !== undefined ||
+        value.apiKey !== undefined
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["configId"],
+          message: "测试已保存配置时不能混传表单值",
+        });
+      }
+      return;
+    }
+    if (value.baseUrl === undefined || value.modelName === undefined || value.apiKey === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["configId"],
+        message: "请提供要测试的配置，或完整填写 Base URL / 模型名 / API 密钥",
+      });
+    }
+  });
+
+export type ModelConnectionTestInput = z.input<typeof modelConnectionTestSchema>;
 
 // ---------- 运行状态展示（UIUX §4.7 RunStatusBadge / §7.3 错误文案映射） ----------
 

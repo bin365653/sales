@@ -610,13 +610,96 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   不影响其创建实验的历史展示；P9 提示词/模型配置页沿用 T08 服务层。
 
 
+## 设置中心与审计（T15 交付）
+
+- **范围口径**：P9 `/settings` 设置中心（两大分段页签）+ 操作日志查询 +
+  账号管理（建号/重置密码/停用启用）+ 提示词版本写端点 + 模型配置测试连接。
+  验收锚点：提示词版本不可变可追溯；关键操作（导入确认/导出/配置/删除/密钥）
+  均有审计（实施计划 §9 T15）。**无新迁移**——全部消费既有表（users /
+  audit_logs / prompt_templates + prompt_versions / model_configs）。
+- **设置中心结构（UIUX P9）**：`/settings?tab=…` 链接式页签（禁 JS 可用），
+  两大分段——个人设置（账号与密码 / 每日工时 / 个人数据导出）| 管理员设置
+  （AI 服务 / 提示词模板 / 阶段管理 / 字段配置 / 账号管理 / 操作日志）。
+  销售不渲染管理员分段、直达 URL 一律 404（越权不暴露存在性）；服务端组件
+  按页签取数（与 API 同一服务层，口径一致）；导航「设置中心」指向 /settings，
+  旧路由 `/settings/worktime` 307 重定向并入（WorktimeWeekForm 组件直接复用）。
+  移动端仅保障改密码/填工时/导出数据（UIUX 约定）。
+- **账号管理（无自助注册，M5）**：`GET/POST /api/settings/users`、
+  `PATCH /api/settings/users/:id`、`POST /api/settings/users/:id/reset-password`
+  （全部仅管理员）。建号/重置由服务端生成 **12 位 base64url 初始密码**
+  （约 71 bit 熵），仅在创建/重置响应中一次性返回（前端横幅展示+复制、
+  关闭不可再看）；Argon2id 落库，审计只记 username/name/role，绝不明文。
+  **重置密码/停用立即撤销该账号全部会话**（UIUX §4.8"会话立即失效"；
+  resolveSession 的 status 检查为双保险）；不能对当前登录账号重置/停用
+  （400 `user_self_action`，防自锁）；停用兜底"至少一个启用中的管理员"
+  （400 `last_admin`，正常调用链由禁自停结构性保证，分支为防御性）；
+  重名 409 `username_conflict`；同状态重复提交幂等（不写审计）；
+  账号**无删除**（UIUX），不提供姓名/角色编辑（V1.0 最小面）。
+- **操作日志查询（UIUX P9）**：`GET /api/settings/audit-logs`（仅管理员）——
+  筛选=动作（精确）/操作人/时间范围（`from`/`to` 上海日历日，to 为含端日）
+  + 分页（每页 50，`createdAt desc + id desc` 稳定排序）；audit_logs 无外键
+  （§4.4），操作人姓名二次批量映射（未知用户显示"未知用户"，覆盖登录失败时
+  用户不存在的行）。/settings?tab=audit 为纯服务端渲染：GET 表单筛选 +
+  `<details>` 行展开 detail JSON，禁 JS 可用；动作文案映射表
+  （`AUDIT_ACTION_LABELS`）覆盖 T02–T15 全部 23 个 action。
+- **提示词版本（验收项：不可变可追溯）**：`POST /api/settings/prompts/:id/versions`
+  （仅管理员）——version = 当前最高+1（`@@unique([templateId, version])`
+  兜底并发，冲突 409 `prompt_version_conflict`）；**保存即生效**
+  （T08 Registry 约定"版本最高者启用"），前端强确认"启用后所有新的 AI 调用
+  将使用该版本"（UIUX §4.8）；**不提供修改/删除端点**——回滚 = 用旧内容
+  再建新版本；ai_runs.prompt_version_id 记录具体 run 所用版本，历史可复现。
+  P9 版本时间线只读展开（内容 + 输出 Schema + 创建人/时间），编辑器带当前
+  输出结构提示与 JSON 校验（须为对象，数组/标量 400）。
+- **测试连接（UIUX P9）**：`POST /api/settings/model-configs/test`（仅管理员）
+  ——两形态二选一：`{configId}`（服务端解密已存配置）或
+  `{baseUrl, modelName, apiKey}`（表单未落库新值），**混传 400**；
+  发起最小 chat/completions 请求（15s、不重试），失败按五分类映射用户文案
+  （timeout/auth/rate_limit/provider），密钥绝不出现在响应与错误信息中；
+  测试不写审计、不改任何数据（非配置变更，避免日志噪音）。
+- **AI 服务页签**：列表（当前启用高亮 + 密钥"已配置（尾号 xxxx）"只写不读，
+  T08 契约）+ 新建（provider 默认 openai_compatible / 密钥仅此一次提交）+
+  编辑（留空保持现有密钥）/替换密钥/单激活（C05）/测试连接。
+- **阶段/字段页签**：复用 T03 API——阶段行内编辑（名称/编码）、上移/下移
+  保存顺序（swap 相邻 sortOrder 两次 PATCH）、启停走确认、预置阶段"⚓ 语义锚点"
+  标记、自定义阶段无删除；字段内置只读（仅启停）、自定义字段新建
+  （key 由前端 `custom_+8hex` 自动生成且此后不可变、type 不可变）与编辑
+  （label/options/validation），固定提示"V1.0 不参与筛选与统计"（C12）。
+- **审计动作全景（写入侧已闭环，验收"关键操作均有审计"逐项对应）**：
+  登录成功/失败/登出/改密（T02）→ `import.confirmed` / `export.created`（T05）→
+  `settings.stage_*` / `settings.field_*` / `lead.deleted` / `lead.batch_updated`
+  （T03/T04）→ `ai.model_config_created/updated`（T08，含 key_replaced=密钥更新）→
+  `experiment.*` + `ai.control_group_blocked`（T14）→ 本任务新增
+  `settings.user_created` / `settings.user_updated` /
+  `settings.user_password_reset` / `settings.prompt_version_created`。
+- **验收锚点**：`tests/unit/settings-schemas.test.ts`（15 例：账号/审计筛选/
+  版本/测试连接 Schema + 初始密码格式与随机性）+
+  `tests/integration/settings-account.test.ts`（12 例：建号初始密码可登录且
+  审计无明文/重置撤销会话旧密失效/停用立即失效与启用恢复/禁自停/last_admin
+  兜底/幂等不写审计/审计筛选含上海日历日边界与 55 行跨页/提示词版本递增且
+  Registry 取最高/列表降序）；T15 冒烟 74 项（`.verify/t15-smoke.cjs`：自建
+  自清 + 启动物理扫残留——401/403/404 权限面、SSR 全页签（销售 3 / 管理员 8）、
+  旧路由 307、重置/停用会话失效、审计筛选与映射、版本递增、测试连接两形态、
+  密钥不回显）；生产 HTTP 冒烟最小闭环 50 / t12=30 / t13=59 / t14=51 回归通过。
+- **踩坑记录（T15 新增）**：⑭Zod v4 的 `.uuid()` 校验 RFC 版本位
+  （version ∈ 1–8、variant ∈ 89ab），测试用 `0f0e0d0c-…` 这类 version=0 的
+  id 会被拒——项目内 UUID 入参一律用宽松形态正则（与 `aiRunCreateSchema`
+  的 leadId 同款）；⑮Zod v4 `z.record()` 需两参签名
+  `z.record(z.string(), z.unknown())`。
+- **给 T16 的约定**：写请求 Origin 校验已在 `assertSameOrigin`（T02 起逐端点
+  接入、T16 全面加固），审计/日志的敏感明文红线已由各服务写入侧保证
+  （密钥只记尾号、密码无明文）；导出限流（5 次/小时）已在 T05 实现
+  （`exportRateLimiter`），T16 补渗透用例固化；上传限制当前为 10MB/5000 行
+  （T05 导入），T16 核对白名单并补恶意公式转义用例；账号管理停用/重置的
+  会话撤销语义（立即失效）是 T16 CSRF/会话固定用例的既定行为基线。
+
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
 
 ```bash
-npm run test                # ① 单元测试（319 例，无需数据库）
-npm run test:integration    # ② 集成测试（166 例，需 PostgreSQL，见上文启动方式）
+npm run test                # ① 单元测试（349 例，无需数据库）
+npm run test:integration    # ② 集成测试（182 例，需 PostgreSQL，见上文启动方式）
 npm run test:smoke          # ③ 最小闭环 E2E 冒烟（需先启动应用）
 ```
 
@@ -652,7 +735,8 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
 6. 线索池导入：下载模板 → 填 1 行有效 + 1 行错误数据 → 上传/映射/预览确认 →
    结果汇总与线索池核对。
 7. 线索池导出与个人全量导出：下载 XLSX/ZIP 核对内容与公式转义。
-8. 每日工时填报（导航「设置中心」→ `/settings/worktime`，T11 临时入口）：默认本周，
+8. 每日工时填报（设置中心 `/settings` → 「每日工时」页签；旧路由
+   `/settings/worktime` 307 重定向至此）：默认本周，
    填 2–3 天 → [保存本周] → 同一天改数值再保存应覆盖且不报错；切上周再切回数值仍在；
    留空的日期保持"未填报"（本周已填计数随之变化）。
 9. 工作台首页 `/`（T12）：今日三卡计数与右上角任务中心一致；点「今日待联系」卡应
@@ -672,7 +756,15 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
     （直达 URL 调 AI 接口 → 403）；看板「AI 组对比」出现该实验（样本 4 < 默认
     阈值 50 → 黄色横幅"样本不足，暂不宜判断"）；关闭实验后常规组徽章消失、
     AI 入口恢复；重复执行分组 → 409。
-12. 右上角登出 → 再访问任意页面回到登录页。
+12. 设置中心 `/settings`（T15）：个人分段改密码（旧密码+新密码+确认，成功后
+    其他设备会话退出）→ 填工时 → 「个人数据导出」一键 ZIP 下载；管理员分段：
+    「AI 服务」新建配置（密钥只显示尾号）+ 测试连接；「提示词模板」展开版本
+    时间线 → 新建版本（强确认后立即生效，旧版本只读可溯）；「阶段管理」行内
+    改名改码、上下移排序、停用确认；「字段配置」新建自定义字段（key 自动生成）；
+    「账号管理」建号（初始密码一次性弹窗）→ 用新号登录 → 重置密码后旧会话
+    掉线 → 停用后登录被拒；「操作日志」按动作/操作人/日期筛选，行展开 detail，
+    上述操作均有对应记录。
+13. 右上角登出 → 再访问任意页面回到登录页。
 
 ## 常用命令
 

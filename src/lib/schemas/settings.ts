@@ -176,3 +176,82 @@ export type StageCreateInput = z.infer<typeof stageCreateSchema>;
 export type StageUpdateInput = z.infer<typeof stageUpdateSchema>;
 export type FieldDefCreateInput = z.infer<typeof fieldDefCreateSchema>;
 export type FieldDefUpdateInput = z.infer<typeof fieldDefUpdateSchema>;
+
+// ---------- 账号管理（T15，UIUX P9：管理员建号/重置密码/停用启用；无删除） ----------
+
+const usernameSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[a-zA-Z0-9_-]{2,64}$/,
+    "用户名须为 2–64 位字母/数字/下划线/中划线",
+  );
+
+const displayNameSchema = z
+  .string()
+  .trim()
+  .min(1, "请输入姓名")
+  .max(64, "姓名不能超过 64 字");
+
+export const USER_ROLES = ["sales", "admin"] as const;
+export const USER_STATUSES = ["active", "disabled"] as const;
+
+export const userCreateSchema = z.object({
+  username: usernameSchema,
+  name: displayNameSchema,
+  role: z.enum(USER_ROLES, { message: "角色不合法" }),
+});
+
+/** 账号管理仅提供停用/启用（改密走「账号与密码」或管理员重置，无其他编辑项） */
+export const userStatusUpdateSchema = z.object({
+  status: z.enum(USER_STATUSES, { message: "状态不合法" }),
+});
+
+export type UserCreateInput = z.infer<typeof userCreateSchema>;
+export type UserStatusUpdateInput = z.infer<typeof userStatusUpdateSchema>;
+
+// ---------- 操作日志查询（T15，UIUX P9：时间范围/动作/操作人筛选 + 分页） ----------
+
+const auditDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式须为 YYYY-MM-DD");
+
+export const auditLogQuerySchema = z
+  .object({
+    action: z.string().trim().max(64).optional(),
+    // 宽松 UUID 形态（zod v4 的 .uuid() 校验版本位，会误伤测试 id）
+    userId: z
+      .string()
+      .trim()
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+        "操作人参数不合法",
+      )
+      .optional(),
+    from: auditDateSchema.optional(),
+    to: auditDateSchema.optional(),
+    page: z.coerce.number().int().min(1).max(10000).optional(),
+  })
+  .refine(
+    (value) =>
+      value.from === undefined ||
+      value.to === undefined ||
+      value.from <= value.to,
+    { message: "开始日期不能晚于结束日期", path: ["from"] },
+  );
+
+export type AuditLogQueryInput = z.infer<typeof auditLogQuerySchema>;
+
+// ---------- 提示词版本（T15，验收项：版本不可变可追溯；只增不改） ----------
+
+export const promptVersionCreateSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, "请输入提示词内容")
+    .max(32000, "提示词内容不能超过 32000 字"),
+  // 结构提示（可选）：必须为 JSON 对象；随版本固化，供编辑器与校验器参考
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type PromptVersionCreateInput = z.infer<typeof promptVersionCreateSchema>;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assertAdmin } from "@/server/permissions";
 import { errorResponse, requireUser } from "@/server/http/api";
-import { prisma } from "@/server/db";
+import { listPromptTemplates } from "@/server/services/prompts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,22 +14,7 @@ export async function GET(request: NextRequest) {
   try {
     const user = await requireUser(request);
     assertAdmin(user);
-    const templates = await prisma.promptTemplate.findMany({
-      orderBy: { runType: "asc" },
-      include: {
-        versions: {
-          orderBy: { version: "desc" },
-          select: {
-            id: true,
-            version: true,
-            content: true,
-            outputSchema: true,
-            createdBy: true,
-            createdAt: true,
-          },
-        },
-      },
-    });
+    const templates = await listPromptTemplates();
     return NextResponse.json({ templates });
   } catch (error) {
     return errorResponse(error);
