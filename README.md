@@ -34,7 +34,8 @@ npm run dev                     # http://localhost:3000
 ### 方式三：本机无 Docker 时（Windows 便携版 PostgreSQL）
 
 本仓库 `.verify/`（已 gitignore）可放一份便携版 PostgreSQL 二进制，
-数据目录须放在**纯 ASCII 路径**（中文路径会导致 initdb/postgres 编码错误）：
+**二进制与数据目录都必须放在纯 ASCII 路径**（中文路径会导致 initdb/postgres
+编码错误，含 initdb 引导失败 `invalid byte sequence`——踩坑⑱）：
 
 ```bash
 # 一次性准备（版本与 compose 的 postgres:16 对齐）
@@ -761,6 +762,75 @@ package\native\bin\pg_ctl.exe -D C:\Users\PC\qince-verify-pgdata stop
   `.env.example` 交付清单在 T18 核对；依赖审计结论（见上）需在交付前复核一次。
 
 
+## 备份恢复与部署（T17 交付）
+
+- **范围口径**：backup/restore 脚本、异地上传（rclone）、失败邮件告警（SMTP）、
+  部署文档、Nginx+HTTPS 配置样例、生产编排文件；验收 = 独立环境恢复演练通过
+  并记录实际 RPO/RTO（记录归档 `docs/ops/restore-drill-2026-10-28.md`）。
+  **无新迁移、无应用代码变更、无新增依赖**（age/rclone 为部署环境可选工具，
+  不进 package.json）。
+- **备份链路（`scripts/backup/backup.sh`）**：`pg_dump -Fc` 自定义格式（MVCC
+  一致性快照，不停应用）→ age 加密（recipient 公钥模式；加密后立即做解密
+  自检，防"密文读不回"；未配置 recipient 显式 WARN 不静默降级）→ 本地保留
+  7 份（按文件名时间戳清理，非规范命名不碰）→（可选）rclone 上传 + 远端 28 天
+  min-age 清理。成功/失败全写 `backups/backup.log`，`backup_ok` 行含
+  耗时/字节数/加密/上传四状态。双模式：`PG_MODE=container`（docker compose
+  exec 透传，生产）| `host`（直连端口，无 Docker 环境/演练）。配置经
+  `scripts/backup/backup.env`（样例 `backup.env.example`；实文件已 gitignore）。
+- **恢复链路（`scripts/backup/restore.sh`）**：`.age` 自动解密（临时明文
+  EXIT 即删）→ 目标库不存在自动创建（template0/UTF8）→ `pg_restore
+  --no-owner --no-privileges`；**同名防护**：目标库与源库同名直接拒绝（exit 2），
+  覆盖式恢复须显式 `RESTORE_ALLOW_OVERWRITE_SOURCE=yes`；可选 `--clean
+  --if-exists`、`--jobs`。
+- **恢复核验（`scripts/backup/verify-restore.ts`，tsx 运行）**：源库 vs 恢复库
+  27 项自动核对——19 张表行数、最新线索/沟通/ai_run/实验分组全字段抽样
+  （含 JSONB 稳定序列化比对）、提示词版本链（模板×最高版本×条数）、
+  model_configs 密文逐字节一致（只报布尔绝不显示内容）、export_files bytea
+  字节流、实验分组计数；差异只报字段名与摘要，敏感值不上屏（§8.3 同红线）。
+- **告警（`scripts/backup/notify.sh`）**：失败经 curl+SMTP 发信（支持 smtps 与
+  STARTTLS，主题/正文 UTF-8 base64 编码词）；`ALERT_DRY_RUN=1` 时邮件全文落
+  `backups/alerts/*.eml`（无 SMTP 账号环境的链路验证形态）。成功只写日志
+  不发信（§8.4）。backup.sh 的 ERR trap 统一走 notify_failure：失败行号与
+  退出码进日志与邮件正文，半截明文 tmp 自动清理。
+- **定时执行**：`scripts/backup/crontab.example`（每日 02:00；上海时区与
+  cron PATH 注意项见注释）。
+- **部署文档（`docs/deploy.md`）**：2C4G 单机全流程——部署前准备清单（SMTP
+  账号、主密钥、age 密钥对、rclone 远端等八项）、应用部署、Nginx+HTTPS
+  （certbot webroot 签发与自动续期）、备份与告警部署、升级/回滚、上线安全
+  复查清单（九项）、常见故障排查（含"写请求 403 origin_forbidden = 未透传
+  X-Forwarded-Host"等 T16 基线相关条目）。
+- **生产编排（`docker-compose.prod.yml`）**：与开发 compose 的差异——不映射
+  5432（数据库仅容器网络可达）、app 只绑 `127.0.0.1:3000`（TLS 由 Nginx 终止）、
+  敏感变量 `${VAR:?}` 缺失即拒绝启动（杜绝默认口令上线）。
+- **Nginx 样例（`deploy/nginx/qince.conf.example`）**：三处与应用安全强耦合
+  不可删——`X-Forwarded-Host`（Origin 校验，缺失 = 同源写请求 403）、
+  `X-Forwarded-For`/`X-Real-IP`（限流/审计 IP）、`client_max_body_size 11m`
+  （应用上传三限 10MB + T16 踩坑⑯ middleware 硬截断余量，nginx 默认 1m 会
+  让合法大文件根本到不了应用）；80→443 301、TLS 1.2+、HSTS 先注释观察一周。
+- **验收锚点（恢复演练记录归档）**：`docs/ops/restore-drill-2026-10-28.md` ——
+  独立实例（5433/独立数据目录，演练后清除）恢复 `verify-restore.ts` 27/27
+  全一致；**RTO 实测 70.2s**（T0 灾难宣告 → 应用 health+登录+页面+写操作
+  验收通过；净链路 ≈57s，目标 ≤4h）、**RPO 实测 0**（设计上限 24h）；告警
+  链路 `.eml` 落盘、本地保留 11→7、同名防护拒绝、主密钥分离语义确认
+  （备份产物无任何密钥）。rclone/真实 SMTP 未实测（本地 MVP 无远端/无账号，
+  分别为云端部署首跑项与部署前准备清单项，已在记录 §4/§5 声明）。
+  本任务回归：lint/typecheck、单测 364、集成 182、生产冒烟最小闭环 50 /
+  t12=30 / t13=59 / t14=51 / t15=73 / t16=50（脚本动态计数，登录限流触发点
+  在窗口边界 ±1）全部通过。
+- **踩坑记录（T17 新增）**：⑱PostgreSQL 二进制**安装路径**含中文时 initdb
+  引导失败（`FATAL: invalid byte sequence for encoding "UTF8": 0xcf 0xee`，
+  即路径 GBK 字节漏进 UTF-8 流）——数据目录放 ASCII 路径**不够**，二进制与
+  share 全树必须在纯 ASCII 路径（演练中把 pgsql 树复制到 `C:\Users\PC\` 后
+  恢复正常；「方式三」原有表述只覆盖了数据目录，T18 交付文档一并修正）。
+- **给 T18 的约定**：应用与 HTTP 面零变化，既有测试基线（单测 364 / 集成 182
+  / 各冒烟套件）直接沿用；T18 核对 `.env.example` 交付清单时，部署侧新增
+  变量以 `scripts/backup/backup.env.example` 与 `docs/deploy.md` §1 准备清单
+  为准（SMTP/age/rclone 走 backup.env，不进应用 .env）；E2E 的类生产环境以
+  生产构建 `next start` + PostgreSQL 16 为基线（compose 形态的迁移+seed 链路
+  由 `docker-entrypoint.sh` 保证，T01 已验收一键启动）；T16 遗留的依赖审计
+  复核在 T18 交付前执行并记录结论。
+
+
 ## 最小闭环验收（T01–T07）
 
 三层验证，从快到慢依次执行：
@@ -849,6 +919,8 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
 | `npm run db:deploy` | 应用已版本化的迁移（部署用，幂等） |
 | `npm run db:seed` | 基础数据 seed（幂等） |
 | `npm run templates:generate` | 重新生成静态导入模板（templates/，字段定义变化后执行） |
+| `bash scripts/backup/backup.sh` | 手动全量备份（pg_dump → age 加密 → 保留 7 份；配置见 `scripts/backup/backup.env.example`，每日 02:00 定时见 `crontab.example`） |
+| `bash scripts/backup/restore.sh <文件.dump.age> --target-db <库名>` | 恢复备份（同名防护；核验见 `scripts/backup/verify-restore.ts`，核对清单 `scripts/restore-drill.md`） |
 
 ## 目录结构
 
@@ -859,7 +931,11 @@ npm run test:smoke          # 另开终端执行；SMOKE_BASE/SMOKE_USERNAME/SMO
 - `src/server/` —— 业务服务、权限、指标引擎、AI 适配层
 - `src/lib/` —— 前后端共享常量与工具（阶段语义锚点等）
 - `tests/` —— 单元 / 集成 / E2E 测试
+- `scripts/` —— 导入模板生成；`scripts/backup/` 备份/恢复/核验脚本与配置样例
+- `docs/` —— 部署文档（deploy.md）；`docs/ops/` 恢复演练记录归档
+- `deploy/` —— Nginx 反向代理 + HTTPS 配置样例
 - `docker-compose.yml` —— app + PostgreSQL 本地与云端同一套
+- `docker-compose.prod.yml` —— 生产编排（不映射 5432、app 仅回环、口令缺省拒启）
 
 ## 数据库约定（节选）
 

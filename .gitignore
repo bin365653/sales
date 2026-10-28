@@ -33,3 +33,10 @@ yarn-error.log*
 # 本地内嵌数据库验证用
 /.verify/
 /pgdata-verify/
+
+# 备份产物与备份本地配置（T17）——产物即使已 age 加密也不入 Git
+/backups/
+scripts/backup/backup.env
+*.age
+age-identity*.txt
+

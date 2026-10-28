@@ -1,0 +1,53 @@
+# 勤策 AI 销售作战台 V1.0 —— 生产编排（T17，实施计划 §8.5）
+# 与 docker-compose.yml（本地开发/演示）的差异：
+#   1. 不映射 5432（PostgreSQL 不暴露宿主机端口，仅容器网络内可达）
+#   2. app 只绑定宿主机回环 127.0.0.1:3000（由前置 Nginx + HTTPS 对外服务）
+#   3. 全部敏感变量无默认值（${VAR:?} 缺失即拒绝启动，杜绝默认口令上线）
+# 用法（服务器上仓库根目录）：
+#   cp .env.example .env && vim .env      # 全部 CHANGE_ME 必须覆盖
+#   docker compose -f docker-compose.prod.yml up -d
+# 升级：git pull && docker compose -f docker-compose.prod.yml up -d --build
+# 备份：scripts/backup/backup.sh（COMPOSE_FILES=docker-compose.prod.yml，见 docs/deploy.md）
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?请在 .env 配置 POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 配置强口令 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?请在 .env 配置 POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    # 生产不映射端口：数据库仅容器网络内可达（compose 内部 DNS 名 postgres）
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?请在 .env 配置 ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请在 .env 配置强口令 ADMIN_PASSWORD}
+      ADMIN_NAME: ${ADMIN_NAME:-管理员}
+      # T08：模型密钥加密主密钥（AES-256-GCM，64 位 hex）；与备份分离存放（§8.3/§8.4）
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?请在 .env 配置 64 位 hex 主密钥（openssl rand -hex 32）}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-50}
+      NODE_ENV: production
+    ports:
+      # 仅回环：外部流量必须经 Nginx（TLS 终止 + 透传 X-Forwarded-* 头）
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

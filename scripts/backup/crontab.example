@@ -1,0 +1,9 @@
+# 备份定时任务示例（T17，§8.4：每日 02:00 全量备份）
+# 部署步骤见 docs/deploy.md「备份与告警部署」；服务器时区建议设为 Asia/Shanghai，
+# 下方 02:00 即上海时间（若时区无法保证，请用 CRON_TZ（cronie/systemd-cron 支持）。
+# 安装：crontab -e 粘贴下行；确认：crontab -l
+#
+# 注意：备份目录须与 backup.env 的 BACKUP_DIR 一致；cron 环境 PATH 极简，
+# docker/age/rclone 建议用绝对路径，或在命令前内联 PATH=：
+#   0 2 * * * PATH=/usr/local/bin:/usr/bin:/bin cd /opt/qince && bash scripts/backup/backup.sh >> backups/cron.log 2>&1
+0 2 * * * cd /opt/qince && bash scripts/backup/backup.sh >> backups/cron.log 2>&1
