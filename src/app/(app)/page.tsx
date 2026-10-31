@@ -1,45 +1,64 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/current-user";
-import { PRIORITY_RULE_EXPLANATION } from "@/lib/metrics";
-import { PRIORITY_BADGE_CLASS, PRIORITY_LABELS } from "@/lib/format";
-import { getWorkbenchSummary } from "@/server/metrics/engine";
+import {
+  formatRelativeShanghai,
+  oneLineSnippet,
+  shanghaiWeekdayLabel,
+  toShanghaiDateString,
+} from "@/lib/format";
+import { CHANNEL_LABELS, DIRECTION_LABELS } from "@/lib/schemas/interaction";
+import { getOperationsWorkbench } from "@/server/services/workbench";
+import { runTaskGenerationLazy } from "@/server/services/task-generation";
+import { listRecentInteractions } from "@/server/services/interactions";
 import { prisma } from "@/server/db";
 import { leadReadScope } from "@/server/permissions";
-import { countLeadsByExpiryView } from "@/server/services/leads";
 import type { LeadQuadrantCode } from "@/lib/quadrant";
 import { QuadrantBadge } from "@/components/leads/quadrant-badge";
-import { CopyPhoneButton } from "@/components/dashboard/copy-phone-button";
+import { WORKBENCH_TABS, type WorkbenchTabKey } from "@/lib/workbench";
+import type { WorkbenchRow } from "@/server/services/workbench";
+import { PRIORITY_RULE_EXPLANATION } from "@/lib/metrics";
 
 export const dynamic = "force-dynamic";
 
-// P2 工作台首页（T12，PRD §5.1 / UIUX P2）：优先呈现可执行动作而非图表。
-// 数据一律经 getWorkbenchSummary（与 GET /api/dashboard/summary 同一实现）：
-// 今日三卡 → /leads?nextContact=today 与任务中心；本周概览（C13 周一起算，
-// T13 起整卡跳转看板并预设"本周"）；建议优先联系（K6 规则引擎，理由必显）；
-// 最近沟通记录（10 条，时间倒序）。
-// V2.0-T04：四象限分布入口条——象限分布一键跳转线索池对应筛选。
+// P2 工作台首页（V2.0-T09 经营视图，PRD 模块七 / UIUX §5.6）：
+// 顶部四卡（今日应跟进/软件半年内到期/画像待完善/已逾期任务，整卡点击跳转）
+// + 五个主列表 Tab（今日优先/月度必跟/画像待完善/四象限重点/长期培育，
+// GET 链接切换，禁 JS 可用）+ 右栏四象限分布与最近沟通记录（沿用）。
+// 每行 = PRD 模块七字段全集：名称/城市行业/当前系统/象限/到期/最近联系/
+// 本次联系原因（规则文案必显）/推荐沟通内容（规则模板）/下一步动作。
+// 本周概览与原「建议优先联系」卡被本视图取代（D4：6 个月到期理由取代
+// 30 天规则，理由文案随 T10 规则引擎输出）。惰性任务生成随首屏执行，
+// 批量生成时顶部一次性 info 条（UIUX §4.9）。
 
 const CARD_LINK_CLASS =
   "block rounded-lg border border-gray-200 bg-white p-4 transition hover:border-blue-300 hover:shadow-sm";
 
-function CountCard({
+const TAB_HREFS: Record<string, string> = {
+  today: "/?tab=today",
+  monthly: "/?tab=monthly",
+  gap: "/?tab=gap",
+  focus: "/?tab=focus",
+  nurture: "/?tab=nurture",
+};
+
+function WorkbenchCard({
   label,
   count,
   href,
-  accent,
+  danger,
 }: {
   label: string;
   count: number;
   href: string;
-  accent?: "danger";
+  danger?: boolean;
 }) {
   return (
     <Link href={href} className={CARD_LINK_CLASS}>
       <div className="text-sm text-gray-500">{label}</div>
       <div
         className={`mt-1 text-3xl font-semibold ${
-          accent === "danger" && count > 0 ? "text-red-600" : "text-gray-900"
+          danger && count > 0 ? "text-red-600" : "text-gray-900"
         }`}
       >
         {count}
@@ -49,38 +68,85 @@ function CountCard({
   );
 }
 
-function MetricCell({
-  label,
-  value,
-  suffix,
-}: {
-  label: string;
-  value: number | null;
-  suffix?: string;
-}) {
+function WorkbenchLeadRowItem({ row }: { row: WorkbenchRow }) {
   return (
-    <div className="flex flex-col">
-      <span className="text-xs text-gray-400">{label}</span>
-      <span className="text-lg font-semibold text-gray-900">
-        {value === null ? "—" : value}
-        {value !== null && suffix ? (
-          <span className="ml-0.5 text-xs font-normal text-gray-400">{suffix}</span>
-        ) : null}
-      </span>
-    </div>
+    <li className="rounded-lg border border-gray-200 bg-white p-4 transition hover:border-blue-300 hover:shadow-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <Link
+          href={`/leads/${row.leadId}`}
+          className="text-base font-medium text-gray-900 hover:text-blue-700"
+        >
+          {row.name}
+        </Link>
+        <QuadrantBadge code={row.quadrant ?? "pending"} />
+        {row.expiryDisplay && (
+          <span className="text-xs text-gray-500" title="软件到期（月粒度口径）">
+            到期 {row.expiryDisplay}
+          </span>
+        )}
+        {row.lastContactDisplay && (
+          <span className="ml-auto text-xs text-gray-400">
+            最近联系 {row.lastContactDisplay}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-gray-500">
+        {[
+          row.cityIndustry,
+          row.currentSystem ? `当前系统：${row.currentSystem}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "—"}
+      </p>
+      <p className="mt-1.5 text-sm text-amber-700">原因：{row.reason}</p>
+      <p className="mt-1 line-clamp-2 text-sm text-gray-600" title={row.talkTrack}>
+        推荐：{row.talkTrack}
+      </p>
+      <p className="mt-1 text-xs text-gray-500">
+        下一步：
+        {row.nextAction
+          ? `${row.nextAction.sourceLabel ? `【${row.nextAction.sourceLabel}】` : ""}${row.nextAction.title}（${row.nextAction.dueDisplay}）`
+          : "暂无待处理任务"}
+      </p>
+      <div className="mt-2 flex gap-2">
+        <Link
+          href={`/leads/${row.leadId}`}
+          className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600 transition hover:bg-gray-50"
+        >
+          详情→
+        </Link>
+        <Link
+          href={`/leads/${row.leadId}#interactions`}
+          className="rounded-md bg-blue-600 px-2 py-1 text-xs text-white transition hover:bg-blue-700"
+        >
+          记录沟通
+        </Link>
+      </div>
+    </li>
   );
 }
 
-export default async function WorkbenchPage() {
+export default async function WorkbenchPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login");
   }
+  const params = await searchParams;
+  const tabParam = Array.isArray(params.tab) ? params.tab[0] : params.tab;
 
-  const summary = await getWorkbenchSummary(user);
-  const { today, week } = summary;
+  // 惰性任务生成（D3）：首屏即完成当日生成；批量生成给一次性 info 条
+  const generationStats = await runTaskGenerationLazy(user);
+  const now = new Date();
+  const [view, recent] = await Promise.all([
+    getOperationsWorkbench(user, { now, tab: tabParam }),
+    listRecentInteractions(user, 10),
+  ]);
 
-  // V2.0-T04：象限分布（与列表筛选同一数据范围口径）
+  // V2.0-T04：四象限分布（与列表筛选同一数据范围口径）
   const quadrantGroups = await prisma.lead.groupBy({
     by: ["quadrantCode"],
     _count: { _all: true },
@@ -91,220 +157,164 @@ export default async function WorkbenchPage() {
   );
   const quadrantOrder: (LeadQuadrantCode | "pending")[] = ["a", "b", "c", "d", "pending"];
 
-  // V2.0-T07：软件到期四视图计数（与列表到期筛选同一实现，口径一致）
-  const expiryCounts = await countLeadsByExpiryView(user);
-  const expiryViews: { key: string; label: string; count: number; danger?: boolean }[] = [
-    { key: "within_6m", label: "未来 6 个月", count: expiryCounts.within_6m },
-    { key: "within_1m", label: "未来 1 个月", count: expiryCounts.within_1m },
-    { key: "expired", label: "已过期", count: expiryCounts.expired, danger: true },
-    { key: "unknown", label: "未知待核实", count: expiryCounts.unknown },
-  ];
+  const rows = view.tabs[view.activeTab];
+  const emptyTexts: Record<string, string> = {
+    today: "今日没有优先客户；完成画像核实后系统会自动安排",
+    monthly: "暂无半年内到期客户",
+    gap: "所有客户的核心画像都已完善",
+    focus: "暂无应跟进的 A/C 类客户；完成画像核实后系统会自动安排",
+    nurture: "暂无应跟进的 B/D 类客户；完成画像核实后系统会自动安排",
+  };
 
   return (
     <section className="mx-auto flex max-w-6xl flex-col gap-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-xl font-semibold">工作台</h1>
+        <h1 className="text-xl font-semibold">客户经营工作台</h1>
         <span className="text-sm text-gray-500">
-          {today.date} {today.weekday}
+          {toShanghaiDateString(now)} {shanghaiWeekdayLabel(now)}
         </span>
       </div>
 
-      {/* V2.0-T04：四象限分布入口条（点击跳线索池对应筛选） */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-3">
-        <span className="mr-1 text-sm font-medium text-gray-700">四象限分布</span>
-        {quadrantOrder.map((code) => (
-          <Link
-            key={code}
-            href={`/leads?quadrant=${code}`}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 transition hover:bg-gray-50"
-          >
-            <QuadrantBadge code={code} />
-            <span className="text-sm font-semibold text-gray-800">
-              {quadrantCounts.get(code) ?? 0}
-            </span>
-          </Link>
-        ))}
-      </div>
+      {generationStats && generationStats.createdTasks > 0 && (
+        <p className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">
+          已为你生成 {generationStats.createdTasks} 条跟进任务
+          （重复执行不会产生重复任务；可在任务中心查看）。
+        </p>
+      )}
 
-      {/* V2.0-T07：软件到期入口条（四视图计数，点击跳线索池对应筛选；
-          半年内到期客户的月度任务由系统强制生成） */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-3">
-        <span className="mr-1 flex items-center gap-1 text-sm font-medium text-gray-700">
-          📅 软件到期
-        </span>
-        {expiryViews.map((view) => (
-          <Link
-            key={view.key}
-            href={`/leads?expiryView=${view.key}`}
-            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-sm transition hover:bg-gray-50 ${
-              view.danger && view.count > 0
-                ? "border-red-200 bg-red-50 text-red-700"
-                : "border-transparent text-gray-600"
-            }`}
-          >
-            <span>{view.label}</span>
-            <span className="font-semibold text-gray-800">{view.count}</span>
-          </Link>
-        ))}
-        <span className="ml-auto text-xs text-gray-400">
-          半年内到期的客户，系统每月自动生成一次跟进任务
-        </span>
-      </div>
-
-      {/* 今日三卡 + 本周概览（UIUX P2 桌面布局） */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <CountCard
-          label="今日待联系（客户）"
-          count={today.dueTodayLeads}
-          href="/leads?nextContact=today"
-        />
-        <CountCard
-          label="今日任务"
-          count={today.tasksToday}
+      {/* 四顶卡（PRD 模块七；整卡点击跳对应视图） */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <WorkbenchCard
+          label="今日应跟进"
+          count={view.cards.followToday}
           href="/tasks?view=today&status=pending"
         />
-        <CountCard
-          label="逾期任务"
-          count={today.tasksOverdue}
-          href="/tasks?view=overdue&status=pending"
-          accent="danger"
+        <WorkbenchCard
+          label="软件半年内到期"
+          count={view.cards.expiringSoon}
+          href="/leads?expiryView=within_6m"
         />
-        <Link
-          href="/analytics?period=week"
-          className="block rounded-lg border border-gray-200 bg-white p-4 transition hover:border-blue-300 hover:shadow-sm"
-        >
-          <div className="flex items-baseline justify-between">
-            <div className="text-sm text-gray-500">本周概览</div>
-            <span className="text-xs text-gray-400" title="周一起算（C13）">
-              {week.from.slice(5)} ~ {week.to.slice(5)}
-            </span>
-          </div>
-          <div className="mt-2 grid grid-cols-4 gap-2">
-            <MetricCell label="呼出" value={week.counts.outboundCalls} />
-            <MetricCell label="有效沟通" value={week.counts.effectiveCommunications} />
-            <MetricCell label="合格" value={week.counts.qualifiedLeads} />
-            <MetricCell label="预约" value={week.counts.demoBookings} />
-          </div>
-          <div className="mt-1 text-right text-xs text-blue-600">
-            查看看板 →
-          </div>
-        </Link>
+        <WorkbenchCard
+          label="画像待完善"
+          count={view.cards.profileGap}
+          href="/leads?quadrant=pending"
+        />
+        <WorkbenchCard
+          label="已逾期任务"
+          count={view.cards.overdueTasks}
+          href="/tasks?view=overdue&status=pending"
+          danger
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        {/* 建议优先联系（K6 规则引擎输出，AI 不参与） */}
+        {/* 五列表（Tab 链接切换；仅渲染当前 Tab，懒加载 UIUX §5.6/§9） */}
         <div className="lg:col-span-3">
-          <div className="mb-2 flex items-center gap-2">
-            <h2 className="text-base font-semibold">建议优先联系</h2>
-            <span
-              title={PRIORITY_RULE_EXPLANATION}
-              className="inline-flex h-5 w-5 cursor-help items-center justify-center rounded-full border border-gray-300 text-xs text-gray-400"
-              aria-label="规则说明"
-            >
-              ⓘ
-            </span>
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            {WORKBENCH_TABS.map((tab) => (
+              <Link
+                key={tab.key}
+                href={TAB_HREFS[tab.key]!}
+                className={`rounded-md px-3 py-1.5 text-sm transition ${
+                  view.activeTab === tab.key
+                    ? "bg-blue-600 font-medium text-white"
+                    : "border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {tab.label}
+              </Link>
+            ))}
           </div>
-          {summary.priorities.length === 0 ? (
+          {rows.length === 0 ? (
             <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center text-sm text-gray-500">
-              当前没有需要优先联系的客户
+              {emptyTexts[view.activeTab]}
             </div>
           ) : (
             <ul className="flex flex-col gap-3">
-              {summary.priorities.map((item) => (
-                <li key={item.leadId}>
-                  <Link
-                    href={`/leads/${item.leadId}`}
-                    className="block rounded-lg border border-gray-200 bg-white p-4 transition hover:border-blue-300 hover:shadow-sm"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-gray-900">
-                        {item.name}
-                      </span>
-                      <span className="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
-                        {item.stageName}
-                      </span>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-xs ${
-                          PRIORITY_BADGE_CLASS[item.priority]
-                        }`}
-                      >
-                        优先级：{PRIORITY_LABELS[item.priority]}
-                      </span>
-                    </div>
-                    <div className="mt-1.5 text-sm text-amber-700">
-                      理由：{item.reasons.join("；")}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-3 text-sm">
-                      <CopyPhoneButton phone={item.contactPhone ?? ""} />
-                      {item.contactName ? (
-                        <span className="text-gray-500">
-                          联系人：{item.contactName}
-                        </span>
-                      ) : null}
-                      <span className="ml-auto flex gap-2">
-                        <span className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600">
-                          去准备
-                        </span>
-                        <span className="rounded-md bg-blue-600 px-2 py-1 text-xs text-white">
-                          记录沟通
-                        </span>
-                      </span>
-                    </div>
-                  </Link>
-                </li>
+              {rows.map((row) => (
+                <WorkbenchLeadRowItem key={row.leadId} row={row} />
               ))}
             </ul>
           )}
         </div>
 
-        {/* 最近沟通记录 */}
-        <div className="lg:col-span-2">
-          <h2 className="mb-2 text-base font-semibold">最近沟通记录</h2>
-          {summary.recentInteractions.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center text-sm text-gray-500">
-              完成首次沟通后，这里会显示记录
+        {/* 右栏：四象限分布 + 最近沟通记录（沿用） */}
+        <div className="flex flex-col gap-4 lg:col-span-2">
+          <div className="rounded-lg border border-gray-200 bg-white p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-medium text-gray-700">四象限分布</span>
+              <span title="点击跳转线索池对应筛选" className="cursor-help text-xs text-gray-400">
+                ⓘ
+              </span>
             </div>
-          ) : (
-            <ul className="flex flex-col divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white">
-              {summary.recentInteractions.map((row) => (
-                <li key={row.id} className="p-3">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <Link
-                      href={`/leads/${row.leadId}`}
-                      className="truncate text-sm font-medium text-gray-900 hover:text-blue-700"
-                    >
-                      {row.leadName}
-                    </Link>
-                    <span className="shrink-0 text-xs text-gray-400">
-                      {row.relativeTime}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
-                    <span>
-                      {row.channelLabel}·{row.directionLabel}
-                      {row.connected ? "·已接通" : "·未接通"}
-                    </span>
-                    {row.effective ? (
-                      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
-                        有效
-                      </span>
-                    ) : (
-                      <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-400">
-                        无效
-                      </span>
-                    )}
-                  </div>
-                  {row.feedbackSnippet ? (
-                    <p className="mt-1 line-clamp-2 text-sm text-gray-600">
-                      {row.feedbackSnippet}
-                    </p>
-                  ) : null}
-                </li>
+            <div className="flex flex-wrap items-center gap-2">
+              {quadrantOrder.map((code) => (
+                <Link
+                  key={code}
+                  href={`/leads?quadrant=${code}`}
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1 transition hover:bg-gray-50"
+                >
+                  <QuadrantBadge code={code} />
+                  <span className="text-sm font-semibold text-gray-800">
+                    {quadrantCounts.get(code) ?? 0}
+                  </span>
+                </Link>
               ))}
-            </ul>
-          )}
+            </div>
+          </div>
+
+          <div>
+            <h2 className="mb-2 text-base font-semibold">最近沟通记录</h2>
+            {recent.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center text-sm text-gray-500">
+                完成首次沟通后，这里会显示记录
+              </div>
+            ) : (
+              <ul className="flex flex-col divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white">
+                {recent.map((row) => (
+                  <li key={row.id} className="p-3">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <Link
+                        href={`/leads/${row.leadId}`}
+                        className="truncate text-sm font-medium text-gray-900 hover:text-blue-700"
+                      >
+                        {row.leadName}
+                      </Link>
+                      <span className="shrink-0 text-xs text-gray-400">
+                        {formatRelativeShanghai(row.occurredAt, now)}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
+                      <span>
+                        {CHANNEL_LABELS[row.channel]}·{DIRECTION_LABELS[row.direction]}
+                        {row.connected ? "·已接通" : "·未接通"}
+                      </span>
+                      {row.effective ? (
+                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
+                          有效
+                        </span>
+                      ) : (
+                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-400">
+                          无效
+                        </span>
+                      )}
+                    </div>
+                    {row.feedback ? (
+                      <p className="mt-1 line-clamp-2 text-sm text-gray-600">
+                        {oneLineSnippet(row.feedback, 48)}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       </div>
+
+      <p className="text-xs text-gray-400" title={PRIORITY_RULE_EXPLANATION}>
+        ⓘ 今日优先与各列表联系原因由固定规则生成并附理由；AI 不参与优先级计算。
+      </p>
     </section>
   );
 }

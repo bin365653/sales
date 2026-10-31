@@ -26,7 +26,8 @@ test("核心闭环：登录→导入→详情→AI→记录→任务→看板", 
   await page.getByLabel("用户名").fill(ADMIN_USERNAME);
   await page.getByLabel("密码").fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
+  // V2.0-T09：首页升级为客户经营工作台（四卡+五列表）
+  await expect(page.getByRole("heading", { name: "客户经营工作台" })).toBeVisible();
 
   // ---------- ② 导入（上传 → 自动映射 → 预览 → 确认 → 结果汇总） ----------
   await page.goto("/leads");
