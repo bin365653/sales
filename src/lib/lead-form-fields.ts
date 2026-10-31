@@ -50,10 +50,21 @@ function toCamel(key: string): string {
   return key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
-const TEXTAREA_DEF_KEYS = new Set(["known_pains", "main_concerns", "remark"]);
-const NUMBER_DEF_KEYS = new Set(["sales_team_size"]);
+const TEXTAREA_DEF_KEYS = new Set([
+  "known_pains",
+  "main_concerns",
+  "remark",
+  "expressed_needs",
+]);
+const NUMBER_DEF_KEYS = new Set(["sales_team_size", "customer_count", "picker_count"]);
 const DATE_DEF_KEYS = new Set(["contract_expiry"]);
-const BOOLEAN_DEF_KEYS = new Set(["considering_switch", "has_clear_demand"]);
+const BOOLEAN_DEF_KEYS = new Set([
+  "considering_switch",
+  "has_clear_demand",
+  "next_gen_mobile_order",
+  "qince_interest",
+  "is_boss_contact",
+]);
 
 function builtinInput(defKey: string): BuiltinInput {
   if (TEXTAREA_DEF_KEYS.has(defKey)) return "textarea";
@@ -117,11 +128,13 @@ export function buildCustomFormFields(defs: FieldDefRow[]): CustomFormField[] {
     }));
 }
 
-/** 表单按组渲染的顺序（管理组最后；组标题见 LEAD_FIELD_GROUP_LABELS） */
+/** 表单按组渲染的顺序（V2.0 六组，UIUX §5.1：基础/业务/软件/意愿/决策/管理） */
 export const FORM_GROUP_ORDER: LeadFieldGroup[] = [
   "basic",
-  "system",
-  "purchase",
+  "business",
+  "software",
+  "intent",
+  "decision",
   "management",
 ];
 

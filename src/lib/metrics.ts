@@ -131,7 +131,9 @@ export const PRIORITY_RULE_WEIGHTS = {
   neverContacted: 1,
 } as const;
 
-export type FactStatusValue = "unknown" | "unverified" | "confirmed";
+// V2.0（P2）：核实状态四态。30 天到期规则的「已确认」口径 = confirmed 或 stated
+// （P3：客户自述即电话销售主要证据，分类/规则按已确认处理）。
+export type FactStatusValue = "unknown" | "unverified" | "stated" | "confirmed";
 
 export interface PriorityRuleInput {
   /** 合同到期日（上海日历日 YYYY-MM-DD，@db.Date 纯日期） */
@@ -188,7 +190,9 @@ export function evaluatePriorityReasons(
 
   if (
     input.contractExpiryDate !== null &&
-    input.contractExpiryStatus === "confirmed"
+    // V2.0（P3）：stated（客户自述待复核）视同已确认
+    (input.contractExpiryStatus === "confirmed" ||
+      input.contractExpiryStatus === "stated")
   ) {
     const diff = calendarDayDiff(today, input.contractExpiryDate);
     if (diff <= CONTRACT_EXPIRY_WINDOW_DAYS) {

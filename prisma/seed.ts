@@ -22,7 +22,7 @@ async function seedBuiltinFieldDefs(): Promise<void> {
   for (const [index, field] of BUILTIN_LEAD_FIELDS.entries()) {
     const existing = await prisma.leadFieldDef.findUnique({
       where: { key: field.key },
-      select: { id: true },
+      select: { id: true, label: true },
     });
     if (existing) {
       continue;
@@ -42,6 +42,30 @@ async function seedBuiltinFieldDefs(): Promise<void> {
   console.log(
     `[seed] 内置字段定义就绪：共 ${BUILTIN_LEAD_FIELDS.length} 个，本次新建 ${created} 个。`,
   );
+}
+
+/**
+ * V2.0 内置字段展示名口径更新（仅当标签仍为 V1.0 默认值时同步，
+ * 管理员改名过的一律保留——seed 幂等原则「不覆盖已有数据」的边界内）。
+ */
+const BUILTIN_LABEL_MIGRATIONS: Record<string, { from: string; to: string }> = {
+  contract_expiry: { from: "合同/到期时间", to: "软件到期时间" },
+};
+
+async function migrateBuiltinFieldLabels(): Promise<void> {
+  for (const [key, migration] of Object.entries(BUILTIN_LABEL_MIGRATIONS)) {
+    const def = await prisma.leadFieldDef.findUnique({
+      where: { key },
+      select: { id: true, label: true },
+    });
+    if (def && def.label === migration.from) {
+      await prisma.leadFieldDef.update({
+        where: { id: def.id },
+        data: { label: migration.to },
+      });
+      console.log(`[seed] 内置字段展示名同步：${key}「${migration.from}」→「${migration.to}」`);
+    }
+  }
 }
 
 async function seedStages(): Promise<void> {
@@ -160,6 +184,7 @@ async function seedPromptTemplates(): Promise<void> {
 async function main(): Promise<void> {
   await seedStages();
   await seedBuiltinFieldDefs();
+  await migrateBuiltinFieldLabels();
   await seedAdmin();
   await seedPromptTemplates();
 }

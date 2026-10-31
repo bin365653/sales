@@ -50,6 +50,9 @@ let stageQualified: { id: string };
 let stageBooked: { id: string };
 let stageClosed: { id: string };
 let modelConfigId: string;
+// 全量口径断言的基线：集成测试直连开发库，库中可能存在真实/冒烟残留数据；
+// 「管理员全量」类精确断言一律用「基线 ∪ 夹具增量」表达，避免环境数据污染。
+let baselineSources: Set<string>;
 
 async function createLead(params: {
   name: string;
@@ -136,6 +139,16 @@ beforeAll(async () => {
   stageQualified = await getPresetStage("qualified");
   stageBooked = await getPresetStage("booked_demo");
   stageClosed = await getPresetStage("closed");
+
+  // 基线：夹具创建前库内已有的非空 source 去重（管理员全量口径下可见）
+  baselineSources = new Set(
+    (
+      await prisma.lead.findMany({
+        where: { deletedAt: null, source: { not: null } },
+        select: { source: true },
+      })
+    ).map((row) => row.source as string),
+  );
 
   const config = await prisma.modelConfig.create({
     data: {
@@ -414,9 +427,9 @@ describe("数据范围：负责人筛选（管理员）与销售强制本人", (
     expect(view.rates.effectivePerHour).toBe(0.1);
     expect(view.aiRunCount).toBe(2);
     expect(view.avgHandleTimeDays).toBe(5.0);
-    // 管理员选项 = 全量去重（A 的 3 个 + B 的 直播）
+    // 管理员选项 = 全量去重（基线 ∪ A 的 3 个 + B 的 直播）
     expect(new Set(view.options.sources)).toEqual(
-      new Set(["电商", "门店", "转介绍", "直播"]),
+      new Set([...baselineSources, "电商", "门店", "转介绍", "直播"]),
     );
     expect(view.options.owners.length).toBeGreaterThanOrEqual(3);
   });

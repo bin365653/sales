@@ -110,7 +110,8 @@ describe("导入行校验（错误原因准确）", () => {
   it("假日期 2026-02-30：报日历日期原因（不静默进位）", () => {
     const result = validate(["客户", "杭州", null, "2026-02-30", null, null, null, null, "2026-01-15"]);
     expect(result.errors).toEqual([
-      { key: "contract_expiry", label: "合同/到期时间", message: "合同/到期时间不是有效的日历日期" },
+      // V2.0：contract_expiry 展示名改为「软件到期时间」（BUILTIN_LABEL_BY_KEY 同步）
+      { key: "contract_expiry", label: "软件到期时间", message: "软件到期时间不是有效的日历日期" },
     ]);
   });
 

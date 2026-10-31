@@ -27,7 +27,7 @@ const HEADERS = [
   "客户名称",
   "城市",
   "联系方式",
-  "合同/到期时间",
+  "软件到期时间", // V2.0：contract_expiry 展示名口径（seed 同步 lead_field_defs）
   "业务员人数",
   "是否考虑更换系统",
 ];
@@ -164,7 +164,7 @@ describe("导入全流程（固定样例文件）", () => {
       { key: "contact_phone", label: "联系方式", message: "联系方式仅支持数字及 + - ( ) 空格" },
     ]);
     expect(byRowNo.get(4)!.errors).toEqual([
-      { key: "contract_expiry", label: "合同/到期时间", message: "合同/到期时间不是有效的日历日期" },
+      { key: "contract_expiry", label: "软件到期时间", message: "软件到期时间不是有效的日历日期" },
     ]);
     expect(byRowNo.get(5)!.errors).toEqual([
       { key: "name", label: "客户名称", message: "请输入客户名称" },

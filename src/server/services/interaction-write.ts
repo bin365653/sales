@@ -13,6 +13,9 @@ import {
   QUALIFIED_STAGE_ANCHOR,
 } from "@/lib/stages";
 import { buildStageSnapshot } from "@/server/services/stages";
+import { applyVerificationWrites } from "@/server/services/lead-verifications";
+import type { VerificationWrite } from "@/server/services/lead-verifications";
+import { LEGACY_STATUS_COLUMN_BY_FIELD } from "@/lib/lead-fields";
 
 // 沟通写入事务核心（T06 抽出）：保存沟通记录（POST /api/leads/:id/interactions）
 // 与完成任务弹窗（T07 POST /api/tasks/:id/complete-with-interaction）共用同一套
@@ -215,6 +218,36 @@ export async function applyInteractionWrite(
 
   const advance = await resolveStageAdvance(tx, lead, flags);
 
+  // V2.0（T01）：「本次确认」经核实元数据写入（source=interaction，置 confirmed），
+  // 旧状态列同事务镜像（V1.0 读取点不漂移）。值写入与新增确认字段随 V2-T03 扩展。
+  const now = new Date();
+  const confirmWrites: VerificationWrite[] = [];
+  if (input.confirmCurrentSystem) {
+    confirmWrites.push({
+      fieldKey: "current_system",
+      status: "confirmed",
+      source: "interaction",
+      verifiedBy: actorId,
+      verifiedAt: now,
+    });
+  }
+  if (input.confirmPurchaseTime) {
+    confirmWrites.push({
+      fieldKey: "purchase_time",
+      status: "confirmed",
+      source: "interaction",
+      verifiedBy: actorId,
+      verifiedAt: now,
+    });
+  }
+  const confirmMirrors: Record<string, "confirmed"> = {};
+  for (const write of confirmWrites) {
+    const legacyColumn = LEGACY_STATUS_COLUMN_BY_FIELD[write.fieldKey];
+    if (legacyColumn) {
+      confirmMirrors[legacyColumn] = "confirmed";
+    }
+  }
+
   await bumpLeadForInteraction(tx, lead.id, advance ? lead.stageId : null, {
     // 补录更早的沟通不回退最近联系时间
     lastContactAt:
@@ -223,15 +256,13 @@ export async function applyInteractionWrite(
         : lead.lastContactAt,
     // 未填写下次联系时间时不改动线索既有计划
     ...(input.nextContactAt ? { nextContactAt } : {}),
-    // "本次确认"（UIUX P5）：人工确认动作 → 画像核实状态置为已确认（不覆盖字段值）
-    ...(input.confirmCurrentSystem
-      ? { currentSystemStatus: "confirmed" as const }
-      : {}),
-    ...(input.confirmPurchaseTime
-      ? { purchaseTimeStatus: "confirmed" as const }
-      : {}),
+    ...confirmMirrors,
     ...(advance ? { stageId: advance.toStage.id } : {}),
   });
+
+  if (confirmWrites.length > 0) {
+    await applyVerificationWrites(tx, lead.id, confirmWrites);
+  }
 
   if (advance) {
     await writeAdvanceEvent(tx, lead.id, actorId, advance, created.id);

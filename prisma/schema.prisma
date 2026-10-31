@@ -35,6 +35,7 @@ model User {
 
   sessions        Session[]
   workTimeEntries WorkTimeEntry[]
+  experiments     Experiment[]
 
   @@map("users")
 }
@@ -98,6 +99,7 @@ model LeadStage {
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   leads Lead[]
+  experiments Experiment[]
 
   @@map("lead_stages")
 }
@@ -115,20 +117,50 @@ enum lead_field_type {
 }
 
 model LeadFieldDef {
-  id         String          @id @default(uuid(7)) @db.Uuid
-  key        String          @unique @db.VarChar(64)
-  label      String          @db.VarChar(64)
-  type       lead_field_type
-  options    Json?           @db.JsonB
-  validation Json?           @db.JsonB
-  isBuiltin  Boolean         @default(false) @map("is_builtin")
-  isActive   Boolean         @default(true) @map("is_active")
-  sortOrder  Int             @map("sort_order")
-  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id          String          @id @default(uuid(7)) @db.Uuid
+  key         String          @unique @db.VarChar(64)
+  label       String          @db.VarChar(64)
+  type        lead_field_type
+  options     Json?           @db.JsonB
+  validation  Json?           @db.JsonB
+  isBuiltin   Boolean         @default(false) @map("is_builtin")
+  isActive    Boolean         @default(true) @map("is_active")
+  // V2.0（T02，实施计划 §3.1）：该字段启用数据字典——新建/编辑/导入值必须
+  // ∈ 字典启用值；存量非字典值可继续显示，编辑时须改选（不静默改写）。
+  dictEnabled Boolean         @default(false) @map("dict_enabled")
+  sortOrder   Int             @map("sort_order")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([isActive, sortOrder])
   @@map("lead_field_defs")
+}
+
+// ---------- 字段核实元数据（V2.0-T01，实施计划 §3.1 五元组 + P2 四态） ----------
+// 每个客户每个可核实字段一行（unique(lead_id, field_key)）：状态四态
+// （unknown/unverified/stated/confirmed）+ 来源 + 核实人 + 核实时间 + 备注。
+// 读取优先本表；V1.0 四个旧状态列同事务镜像（deprecated，读取兜底）。
+// verified_by 逻辑关联 users（同 audit_logs 惯例，不加外键）。
+// 值变化 → 状态自动置 unverified（修复 V1.0「值变状态不变」缺陷）并更新核实人/时间；
+// 清空值 → unknown；历史不可变由 lead_events(updated.changed) 承担，本表只存现状。
+
+model LeadFieldVerification {
+  id         String              @id @default(uuid(7)) @db.Uuid
+  leadId     String              @map("lead_id") @db.Uuid
+  fieldKey   String              @map("field_key") @db.VarChar(64)
+  status     fact_status         @default(unknown)
+  source     verification_source @default(manual)
+  verifiedBy String?             @map("verified_by") @db.Uuid
+  verifiedAt DateTime?           @map("verified_at") @db.Timestamptz(6)
+  note       String?             @db.VarChar(255)
+  createdAt  DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([leadId, fieldKey])
+  @@index([leadId])
+  @@map("lead_field_verifications")
 }
 
 // ---------- 客户线索核心表（T03，实施计划 §4.3） ----------
@@ -139,10 +171,41 @@ model LeadFieldDef {
 // data_version：乐观并发控制 + AI 输入数据版本号（PRD §5.5）。
 // deleted_at：软删除标记，历史表（lead_events 等）永不物理删除（M1/C11）。
 
+// V2.0（P2）：新增 stated（客户自述待复核）——电话销售场景中客户自述即主要
+// 证据来源；进入四象限的「确认」= confirmed 或 stated（口径 P3，V2-T04 固化）。
+// V1.0 存量 confirmed 语义不变；四个旧状态列与本枚举同型，同步写（V2-T01）。
 enum fact_status {
   unknown
   unverified
+  stated
   confirmed
+}
+
+// V2.0 四象限（P1）：a=第一象限（在用新一代+有意愿）/ b=第二（在用新一代+无意愿）
+// / c=第三（未用新一代+有意愿）/ d=第四（未用新一代+无意愿）。
+// 由服务端按已确认双维计算（evaluateQuadrant，V2-T04），用户不可直填；
+// null = 画像待完善（任一维度未确认，未知≠否）。
+enum lead_quadrant {
+  a
+  b
+  c
+  d
+}
+
+// V2.0 画像完善度（P5）：按核实状态计算而非填写数量（迭代文档红线）。
+enum profile_status {
+  incomplete
+  basic
+  deep
+}
+
+// V2.0 核实元数据来源：manual=线索创建/编辑；import=导入确认；
+// interaction=沟通「本次确认」；initial=迁移回填（V1.0 存量对账基线）。
+enum verification_source {
+  manual
+  import
+  interaction
+  initial
 }
 
 enum lead_priority {
@@ -179,10 +242,38 @@ model Lead {
   decisionProcess      String?       @map("decision_process") @db.VarChar(255)
   mainConcerns         String?       @map("main_concerns") @db.Text
   // —— 核实状态（未知/待核实/已确认，§4.3 四个关键事实字段）——
+  // V2.0：核实元数据主存储迁往 lead_field_verifications（四态 + 五元组），
+  // 本组四列保留并同步写（优先级规则 / AI context / 详情徽章三处旧读取点不漂移），
+  // 标记 deprecated，V2.x 后期下线。
   currentSystemStatus  fact_status   @default(unknown) @map("current_system_status")
   contractExpiryStatus fact_status   @default(unknown) @map("contract_expiry_status")
   purchaseTimeStatus   fact_status   @default(unknown) @map("purchase_time_status")
   decisionMakerStatus  fact_status   @default(unknown) @map("decision_maker_status")
+  // —— V2.0 画像扩展（实施计划 §3.1，全部可空，存量行不受影响）——
+  // 软件画像 / X 轴：是否新一代手机开单（null=未知；字典建议确认后写入，D1）
+  nextGenMobileOrder   Boolean?      @map("next_gen_mobile_order")
+  // 意愿画像 / Y 轴：是否愿意沟通了解勤策（null=未知）
+  qinceInterest        Boolean?      @map("qince_interest")
+  // 分类：服务端计算（evaluateQuadrant，V2-T04），PRD §四不允许用户填写
+  quadrantCode         lead_quadrant? @map("quadrant_code")
+  quadrantComputedAt   DateTime?     @map("quadrant_computed_at") @db.Timestamptz(6)
+  // 完善度：服务端按核实状态维护（P5，V2-T04）
+  profileStatus        profile_status? @map("profile_status")
+  lastProfileVerifiedAt DateTime?    @map("last_profile_verified_at") @db.Timestamptz(6)
+  softwareVersion      String?       @map("software_version") @db.VarChar(128)
+  salesTeamScale       String?       @map("sales_team_scale") @db.VarChar(32)
+  customerCount        Int?          @map("customer_count")
+  businessMgmtMode     String?       @map("business_mgmt_mode") @db.VarChar(64)
+  orderMgmtMode        String?       @map("order_mgmt_mode") @db.VarChar(64)
+  deliveryMgmtMode     String?       @map("delivery_mgmt_mode") @db.VarChar(64)
+  financeMgmtMode      String?       @map("finance_mgmt_mode") @db.VarChar(64)
+  warehouseArea        String?       @map("warehouse_area") @db.VarChar(64)
+  warehouseType        String?       @map("warehouse_type") @db.VarChar(32)
+  pickerCount          Int?          @map("picker_count")
+  purchaseIntent       String?       @map("purchase_intent") @db.VarChar(64)
+  expressedNeeds       String?       @map("expressed_needs") @db.Text
+  noInterestReason     String?       @map("no_interest_reason") @db.VarChar(255)
+  isBossContact        Boolean?      @map("is_boss_contact")
   // —— 管理组 ——
   stageId              String        @map("stage_id") @db.Uuid
   priority             lead_priority @default(mid)
@@ -202,6 +293,7 @@ model Lead {
   tasks        Task[]
   aiRuns       AiRun[]
   experimentAssignments ExperimentAssignment[]
+  fieldVerifications LeadFieldVerification[]
 
   @@index([ownerId, deletedAt, stageId])
   @@index([ownerId, nextContactAt])
@@ -221,6 +313,10 @@ enum lead_event_type {
   updated
   stage_changed
   deleted
+  // V2.0（§3.3）：分类变化（quadrant 重算留痕，detail 含 from/to + basis 双维快照）；
+  // 跟进计划重算（迭代二 recalcFollowUpPlan，本迁移先扩枚举，事件随迭代二写入）
+  quadrant_changed
+  plan_changed
 }
 
 model LeadEvent {
@@ -597,6 +693,11 @@ model Experiment {
   updatedAt     DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   assignments ExperimentAssignment[]
+  // V2.0-T01 补声明：t14 迁移已存在的外键（RESTRICT，保护圈选条件引用的阶段/负责人
+  // 不被物理删除）此前未在 schema 中声明，导致 migrate diff 误判为漂移欲删除；
+  // 此处按库中实际约束补齐（onDelete: Restrict），无行为变化。
+  stageLeadStage LeadStage? @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  ownerUser User? @relation(fields: [ownerId], references: [id], onDelete: Restrict)
 
   @@index([status, assignedAt])
   @@map("experiments")

@@ -1,4 +1,4 @@
-import { Lead, LeadStage, Prisma } from "@prisma/client";
+import { Lead, LeadFieldVerification, LeadStage, Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { ApiError } from "@/server/http/api";
 import { writeAudit } from "@/server/auth/audit";
@@ -22,6 +22,13 @@ import {
 } from "@/server/services/stages";
 import { assertLeadReadable, assertLeadWritable, leadReadScope } from "@/server/permissions";
 import { validateCustomValues, FieldDefLike, FieldIssue } from "@/lib/lead-field-validation";
+import {
+  applyVerificationWrites,
+  collectExplicitStatuses,
+  computeVerificationWrites,
+  ComputedVerificationWrites,
+  VerificationSourceValue,
+} from "@/server/services/lead-verifications";
 
 // 线索服务（T03）：新建/编辑/详情/软删除/阶段流转/列表。
 // 关键不变量：
@@ -170,6 +177,23 @@ function createScalarData(
     decisionMaker: input.decisionMaker ?? null,
     decisionProcess: input.decisionProcess ?? null,
     mainConcerns: input.mainConcerns ?? null,
+    // —— V2.0 画像扩展（实施计划 §3.1）——
+    nextGenMobileOrder: input.nextGenMobileOrder ?? null,
+    qinceInterest: input.qinceInterest ?? null,
+    softwareVersion: input.softwareVersion ?? null,
+    salesTeamScale: input.salesTeamScale ?? null,
+    customerCount: input.customerCount ?? null,
+    businessMgmtMode: input.businessMgmtMode ?? null,
+    orderMgmtMode: input.orderMgmtMode ?? null,
+    deliveryMgmtMode: input.deliveryMgmtMode ?? null,
+    financeMgmtMode: input.financeMgmtMode ?? null,
+    warehouseArea: input.warehouseArea ?? null,
+    warehouseType: input.warehouseType ?? null,
+    pickerCount: input.pickerCount ?? null,
+    purchaseIntent: input.purchaseIntent ?? null,
+    expressedNeeds: input.expressedNeeds ?? null,
+    noInterestReason: input.noInterestReason ?? null,
+    isBossContact: input.isBossContact ?? null,
     currentSystemStatus: input.currentSystemStatus ?? "unknown",
     contractExpiryStatus: input.contractExpiryStatus ?? "unknown",
     purchaseTimeStatus: input.purchaseTimeStatus ?? "unknown",
@@ -251,6 +275,55 @@ function updateScalarData(
   if (input.mainConcerns !== undefined) {
     data.mainConcerns = input.mainConcerns;
   }
+  // —— V2.0 画像扩展（实施计划 §3.1；undefined=不修改，null=显式清空）——
+  if (input.nextGenMobileOrder !== undefined) {
+    data.nextGenMobileOrder = input.nextGenMobileOrder;
+  }
+  if (input.qinceInterest !== undefined) {
+    data.qinceInterest = input.qinceInterest;
+  }
+  if (input.softwareVersion !== undefined) {
+    data.softwareVersion = input.softwareVersion;
+  }
+  if (input.salesTeamScale !== undefined) {
+    data.salesTeamScale = input.salesTeamScale;
+  }
+  if (input.customerCount !== undefined) {
+    data.customerCount = input.customerCount;
+  }
+  if (input.businessMgmtMode !== undefined) {
+    data.businessMgmtMode = input.businessMgmtMode;
+  }
+  if (input.orderMgmtMode !== undefined) {
+    data.orderMgmtMode = input.orderMgmtMode;
+  }
+  if (input.deliveryMgmtMode !== undefined) {
+    data.deliveryMgmtMode = input.deliveryMgmtMode;
+  }
+  if (input.financeMgmtMode !== undefined) {
+    data.financeMgmtMode = input.financeMgmtMode;
+  }
+  if (input.warehouseArea !== undefined) {
+    data.warehouseArea = input.warehouseArea;
+  }
+  if (input.warehouseType !== undefined) {
+    data.warehouseType = input.warehouseType;
+  }
+  if (input.pickerCount !== undefined) {
+    data.pickerCount = input.pickerCount;
+  }
+  if (input.purchaseIntent !== undefined) {
+    data.purchaseIntent = input.purchaseIntent;
+  }
+  if (input.expressedNeeds !== undefined) {
+    data.expressedNeeds = input.expressedNeeds;
+  }
+  if (input.noInterestReason !== undefined) {
+    data.noInterestReason = input.noInterestReason;
+  }
+  if (input.isBossContact !== undefined) {
+    data.isBossContact = input.isBossContact;
+  }
   if (input.currentSystemStatus !== undefined) {
     data.currentSystemStatus = input.currentSystemStatus;
   }
@@ -299,6 +372,8 @@ export interface LeadDetail {
     actorId: string | null;
     occurredAt: Date;
   }[];
+  /** V2.0（T01）：核实元数据五元组（fieldKey 唯一）；读取方按 fieldKey 索引 */
+  verifications: LeadFieldVerification[];
 }
 
 export async function getLeadDetail(
@@ -307,7 +382,7 @@ export async function getLeadDetail(
 ): Promise<LeadDetail> {
   const lead = await loadActiveLeadOrThrow(id);
   assertLeadReadable(actor, lead.ownerId);
-  const [withStage, events] = await Promise.all([
+  const [withStage, events, verifications] = await Promise.all([
     prisma.lead.findUniqueOrThrow({
       where: { id },
       include: { stage: true },
@@ -316,8 +391,9 @@ export async function getLeadDetail(
       where: { leadId: id },
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
     }),
+    prisma.leadFieldVerification.findMany({ where: { leadId: id } }),
   ]);
-  return { lead: withStage, events };
+  return { lead: withStage, events, verifications };
 }
 
 // ---------- 新建 ----------
@@ -340,11 +416,21 @@ export async function createLead(
     ? (custom.values as Prisma.InputJsonValue)
     : undefined;
 
+  // V2.0（T01）：核实写入计算（显式状态优先；create 且值非空且无显式状态 → unverified）
+  const computed = computeVerificationWrites({
+    mode: "create",
+    submittedValues: createScalarData(input) as unknown as Record<string, unknown>,
+    explicitStatuses: collectExplicitStatuses(input as unknown as Record<string, unknown>),
+    source: "manual",
+    actorId: actor.id,
+    now: new Date(),
+  });
+
   const created = await prisma.$transaction((tx) =>
     insertLeadWithEvent(tx, actor, input, customValues, {
       stageId: stage.id,
       eventType: "created",
-    }),
+    }, computed),
   );
 
   return prisma.lead.findUniqueOrThrow({
@@ -356,6 +442,8 @@ export async function createLead(
 /**
  * 事务内建线索 + 首事件（created / imported 共用同一套写入路径，
  * 导入确认（T05）以 imported 事件 + 批次明细留痕，其余语义与新建完全一致）。
+ * V2.0（T01）：verifications 计算结果（缺省按 source=import 重算）在同事务落
+ * lead_field_verifications，并镜像四个旧状态列。
  */
 export async function insertLeadWithEvent(
   tx: Db,
@@ -366,20 +454,38 @@ export async function insertLeadWithEvent(
     stageId: string;
     eventType: "created" | "imported";
     eventDetail?: Prisma.InputJsonValue;
+    /** 核实写入的来源口径：手工新建 manual / 导入确认 import */
+    verificationSource?: VerificationSourceValue;
   },
+  computed?: ComputedVerificationWrites,
 ): Promise<Lead> {
   const stage = await tx.leadStage.findUniqueOrThrow({
     where: { id: options.stageId },
   });
+  const source: VerificationSourceValue = options.verificationSource ?? "manual";
+  const verification = computed ?? computeVerificationWrites({
+    mode: "create",
+    submittedValues: createScalarData(input) as unknown as Record<string, unknown>,
+    explicitStatuses: {},
+    source,
+    actorId: actor.id,
+    now: new Date(),
+  });
+  const scalar = createScalarData(input);
+  // 旧状态列镜像（V1.0 读取点不漂移）：核实写入的最终状态覆盖默认值
   const lead = await tx.lead.create({
     data: {
-      ...createScalarData(input),
+      ...scalar,
+      ...verification.legacyMirrors,
       stageId: stage.id,
       ownerId: actor.id,
       customValues,
       dataVersion: 1,
     },
   });
+  if (verification.writes.length > 0) {
+    await applyVerificationWrites(tx, lead.id, verification.writes);
+  }
   await tx.leadEvent.create({
     data: {
       leadId: lead.id,
@@ -440,17 +546,44 @@ export async function updateLead(
   Object.assign(merged, custom.values);
 
   const scalar = updateScalarData(input);
-  const toSnakeCase = (key: string) =>
-    key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-  const changedKeys = [
-    ...Object.keys(scalar).map(toSnakeCase),
-    ...Object.keys(providedCustom).map((key) => `custom:${key}`),
-  ];
+
+  // V2.0（T01）：值变化 → 状态自动 unverified + 核实人/时间更新（显式状态优先）；
+  // 旧状态列镜像；changed 明细（from/to/statusFrom/statusTo）供 updated 事件留痕。
+  const existingVerifications = await prisma.leadFieldVerification.findMany({
+    where: { leadId: id },
+  });
+  const computed = computeVerificationWrites({
+    mode: "update",
+    existing: existing as unknown as Record<string, unknown>,
+    existingRows: existingVerifications,
+    submittedValues: scalar as unknown as Record<string, unknown>,
+    explicitStatuses: collectExplicitStatuses(input as unknown as Record<string, unknown>),
+    source: "manual",
+    actorId: actor.id,
+    now: new Date(),
+  });
+
+  // 自定义字段值变更并入 changed（键 = custom:<key>；与内置字段同一明细结构）
+  const changedDetail: Record<string, ComputedVerificationWrites["changed"][string]> = {
+    ...computed.changed,
+  };
+  for (const key of Object.keys(providedCustom)) {
+    const oldValue = stored[key];
+    const newValue = merged[key];
+    const from =
+      typeof oldValue === "string" || typeof oldValue === "number" ? oldValue : null;
+    const to =
+      typeof newValue === "string" || typeof newValue === "number" ? newValue : null;
+    if (from !== to) {
+      changedDetail[`custom:${key}`] = { from, to };
+    }
+  }
 
   await prisma.$transaction(async (tx) => {
     // 期望版本取客户端提交值（乐观并发）；existing 仅用于存在性与权限校验
     const updated = await conditionalBump(tx, id, input.dataVersion, {
       ...scalar,
+      ...computed.legacyMirrors,
       customValues: Object.keys(merged).length
         ? (merged as Prisma.InputJsonValue)
         : Prisma.DbNull,
@@ -458,14 +591,22 @@ export async function updateLead(
     if (!updated) {
       await raiseVersionConflictOr404(tx, id);
     }
-    if (changedKeys.length > 0) {
-      // detail 只记字段名，不记值（客户数据最小化落日志，§8.3）
+    if (computed.writes.length > 0) {
+      await applyVerificationWrites(tx, id, computed.writes);
+    }
+    if (Object.keys(changedDetail).length > 0) {
+      // detail 含变更明细（from/to/statusFrom/statusTo）：字段值变化保留历史，
+      // 不静默覆盖（联系方式在写入计算层脱敏为「已变更」）
       await tx.leadEvent.create({
         data: {
           leadId: id,
           actorId: actor.id,
           eventType: "updated",
-          detail: { fields: changedKeys } as Prisma.InputJsonValue,
+          detail: {
+            fields: Object.keys(changedDetail),
+            changed: changedDetail,
+            source: "manual",
+          } as unknown as Prisma.InputJsonValue,
         },
       });
     }

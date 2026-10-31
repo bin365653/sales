@@ -43,6 +43,8 @@ let stageBooked: { id: string };
 let stageClosed: { id: string };
 let stageNew: { id: string };
 let modelConfigId: string;
+// 阶段分布（管理员全量）断言的基线：夹具创建前各阶段既有非删除线索数
+let baselineStageCountByStage: Map<string, number>;
 
 async function createLead(params: {
   name: string;
@@ -146,6 +148,17 @@ beforeAll(async () => {
   stageBooked = await getPresetStage("booked_demo");
   stageClosed = await getPresetStage("closed");
   stageNew = await getPresetStage("new_lead");
+
+  // 全量口径断言的基线：集成测试直连开发库，库中可能存在真实/冒烟残留数据；
+  // 阶段分布（管理员全量）用「基线 + 夹具增量」表达，避免环境数据污染。
+  const baselineStageCounts = await prisma.lead.groupBy({
+    by: ["stageId"],
+    _count: { _all: true },
+    where: { deletedAt: null },
+  });
+  baselineStageCountByStage = new Map(
+    baselineStageCounts.map((row) => [row.stageId, row._count._all]),
+  );
 
   const config = await prisma.modelConfig.create({
     data: {
@@ -335,9 +348,9 @@ describe("指标快照：固定 fixtures 与手工计算逐项一致", () => {
     const booked = snapshot.stageDistribution.find(
       (row) => row.stageId === stageBooked.id,
     );
-    // 合格 = A1/A3/A5/A7 + B1 = 5；已预约演示 = A4 = 1
-    expect(qualified?.count).toBe(5);
-    expect(booked?.count).toBe(1);
+    // 合格 = 基线 + A1/A3/A5/A7 + B1 = 基线 + 5；已预约演示 = 基线 + A4 = 基线 + 1
+    expect(qualified!.count - (baselineStageCountByStage.get(stageQualified.id) ?? 0)).toBe(5);
+    expect(booked!.count - (baselineStageCountByStage.get(stageBooked.id) ?? 0)).toBe(1);
   });
 });
 

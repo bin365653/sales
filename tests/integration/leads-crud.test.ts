@@ -100,7 +100,7 @@ describe("新建与空值可保存", () => {
 });
 
 describe("编辑与乐观并发（data_version）", () => {
-  it("局部更新只改提交字段；版本 +1；写 updated 事件（只记字段名）", async () => {
+  it("局部更新只改提交字段；版本 +1；updated 事件留痕（V2 起含变更明细）", async () => {
     const sales = await createTestUser("sales");
     const lead = await createLead(sales, {
       name: "编辑验证客户",
@@ -120,8 +120,14 @@ describe("编辑与乐观并发（data_version）", () => {
 
     const detail = await getLeadDetail(sales, lead.id);
     const updatedEvent = detail.events.find((event) => event.eventType === "updated");
-    expect(updatedEvent?.detail).toEqual({
+    // V2.0（T01）：detail 含 fields（兼容）+ changed 明细（from/to）+ source
+    expect(updatedEvent?.detail).toMatchObject({
       fields: expect.arrayContaining(["city", "contact_name"]),
+      changed: {
+        city: { from: "武汉", to: "南昌" },
+        contact_name: { from: null, to: "王经理" },
+      },
+      source: "manual",
     });
   });
 

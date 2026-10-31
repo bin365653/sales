@@ -127,10 +127,13 @@ describe("buildLeadExportTable", () => {
     expect(table.cells[0]![quotaIdx]).toBe(42);
   });
 
-  it("表头顺序：内置 23 列 → 自定义 → 管理列，管理列含阶段/优先级/负责人/时间", () => {
+  it("表头顺序：内置列（V2 起含 20 个画像扩展字段）→ 自定义 → 管理列", () => {
     const table = buildLeadExportTable([], []);
     expect(table.headers[0]).toBe("客户名称");
-    expect(table.headers[22]).toBe("备注");
+    expect(table.headers).toContain("备注");
+    expect(table.headers).toContain("是否新一代手机开单");
+    expect(table.headers).toContain("是否愿意沟通了解勤策");
+    expect(table.headers).toContain("软件到期时间");
     expect(table.headers.at(-1)).toBe("更新时间");
     for (const label of ["客户阶段", "优先级", "负责人", "最近联系时间", "创建时间"]) {
       expect(table.headers).toContain(label);

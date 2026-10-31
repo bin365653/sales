@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { BUILTIN_LEAD_FIELD_KEYS } from "@/lib/lead-fields";
+import {
+  BUILTIN_LEAD_FIELD_KEYS,
+  VERIFIABLE_FIELD_KEYS,
+} from "@/lib/lead-fields";
 
 // 线索相关入参 Schema（T03）：API 入参与前端表单共用同一份定义（实施计划 §2.1），
 // 字段校验前后端一致由"共用本文件"保证。
@@ -10,11 +13,18 @@ import { BUILTIN_LEAD_FIELD_KEYS } from "@/lib/lead-fields";
 // - undefined（编辑时未提交）与 null（显式清空）语义区分，PATCH 局部更新依赖该区分；
 // - 客户阶段不在本 Schema 内：阶段流转只走 PATCH /api/leads/:id/stage 单一入口。
 
-export const FACT_STATUSES = ["unknown", "unverified", "confirmed"] as const;
+// V2.0（P2）：新增 stated（客户自述待复核）——客户在沟通中自述、尚未二次复核；
+// 分类按已确认处理（口径 P3），徽章文案「客户自述待复核」。
+export const FACT_STATUSES = [
+  "unknown",
+  "unverified",
+  "stated",
+  "confirmed",
+] as const;
 export const LEAD_PRIORITIES = ["high", "mid", "low"] as const;
 
 const factStatusSchema = z.enum(FACT_STATUSES, {
-  message: "核实状态须为 unknown / unverified / confirmed",
+  message: "核实状态须为 unknown / unverified / stated / confirmed",
 });
 
 const uuidSchema = z
@@ -96,6 +106,18 @@ const phoneSchema = z
   .regex(/^[+\d][\d\-\s()]*$/, "联系方式仅支持数字及 + - ( ) 空格");
 
 /**
+ * V2.0 字段核实状态输入（V2-T01）：snake_case fieldKey → 四态。
+ * 白名单外键直接在 Schema 层拒绝（不静默忽略）；键不存在于提交中 = 未触及。
+ * 语义：显式提交的状态优先；值变化且未显式提交状态时由服务层自动置 unverified。
+ */
+const verificationStatusesSchema = z
+  .record(z.string(), factStatusSchema)
+  .refine(
+    (value) => Object.keys(value).every((key) => VERIFIABLE_FIELD_KEYS.has(key)),
+    { message: "提交了不可核实的字段（不在核实白名单内）" },
+  );
+
+/**
  * 本地日期时间（无时区后缀）统一按 Asia/Shanghai（+08:00）解释（决策 C13）：
  * - "2026-10-25" → 2026-10-25 00:00:00 +08:00（下次联系按整天计划）；
  * - "2026-10-25T14:30" / "2026-10-25 14:30" → 同日 14:30 +08:00；
@@ -171,7 +193,7 @@ export const leadCreateSchema = z.object({
   salesMode: optionalText(64, "销售模式"),
   currentSystem: optionalText(128, "当前使用系统"),
   systemModules: optionalText(255, "使用模块"),
-  contractExpiry: optionalDateString("合同/到期时间"),
+  contractExpiry: optionalDateString("软件到期时间"),
   knownPains: optionalMultilineText("已知不满"),
   consideringSwitch: optionalBoolean(),
   hasClearDemand: optionalBoolean(),
@@ -180,10 +202,29 @@ export const leadCreateSchema = z.object({
   decisionMaker: optionalText(128, "决策人"),
   decisionProcess: optionalText(255, "决策流程"),
   mainConcerns: optionalMultilineText("主要顾虑"),
+  // —— V2.0 画像扩展字段（实施计划 §3.1，全部可空：空值可保存，不强迫假数据）——
+  nextGenMobileOrder: optionalBoolean(),
+  qinceInterest: optionalBoolean(),
+  softwareVersion: optionalText(128, "软件品牌及版本"),
+  salesTeamScale: optionalText(32, "业务员规模"),
+  customerCount: optionalPositiveInt("客户数量"),
+  businessMgmtMode: optionalText(64, "业务管理方式"),
+  orderMgmtMode: optionalText(64, "订单管理方式"),
+  deliveryMgmtMode: optionalText(64, "配送管理方式"),
+  financeMgmtMode: optionalText(64, "财务管理方式"),
+  warehouseArea: optionalText(64, "仓储面积"),
+  warehouseType: optionalText(32, "平仓/立体仓"),
+  pickerCount: optionalPositiveInt("拣货员人数"),
+  purchaseIntent: optionalText(64, "当前购买意愿"),
+  expressedNeeds: optionalMultilineText("已表达的需求"),
+  noInterestReason: optionalText(255, "暂无意愿的原因"),
+  isBossContact: optionalBoolean(),
   currentSystemStatus: factStatusSchema.optional(),
   contractExpiryStatus: factStatusSchema.optional(),
   purchaseTimeStatus: factStatusSchema.optional(),
   decisionMakerStatus: factStatusSchema.optional(),
+  /** V2.0 核实状态输入（V2-T01）：白名单外键 400 */
+  verifications: verificationStatusesSchema.optional(),
   priority: z.enum(LEAD_PRIORITIES, { message: "优先级须为 high / mid / low" }).optional(),
   /** 缺省时落到语义锚点 new_lead 对应的启用阶段（见线索服务） */
   stageId: uuidSchema.optional(),

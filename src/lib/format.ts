@@ -1,12 +1,14 @@
 // 前后端共享的展示工具（T04）：枚举文案、Asia/Shanghai 日期格式化。
 // 统一走 Intl +固定时区，不依赖运行环境本地时区（决策 C13）。
 
-export type FactStatus = "unknown" | "unverified" | "confirmed";
+// V2.0（P2）：四态核实状态——新增 stated（客户自述待复核，蓝 CircleUserRound）。
+export type FactStatus = "unknown" | "unverified" | "stated" | "confirmed";
 export type LeadPriority = "high" | "mid" | "low";
 
 export const FACT_STATUS_LABELS: Record<FactStatus, string> = {
   unknown: "未知",
   unverified: "待核实",
+  stated: "客户自述待复核",
   confirmed: "已确认",
 };
 
@@ -72,11 +74,21 @@ export function formatPriority(priority: string): string {
   return PRIORITY_LABELS[priority as LeadPriority] ?? priority;
 }
 
-/** 徽标配色：核实状态 / 优先级（Tailwind 静态类，便于 JIT 扫描） */
+/** 徽标配色：核实状态 / 优先级（Tailwind 静态类，便于 JIT 扫描）。
+ * stated = 蓝（客户自述待复核，UIUX §3.2 CircleUserRound 蓝） */
 export const FACT_STATUS_BADGE_CLASS: Record<FactStatus, string> = {
   unknown: "bg-gray-100 text-gray-500",
   unverified: "bg-amber-50 text-amber-700",
+  stated: "bg-blue-50 text-blue-700",
   confirmed: "bg-emerald-50 text-emerald-700",
+};
+
+/** 核实徽章 tooltip（UIUX §7.2 红线文案）：stated 按已确认处理但建议复核 */
+export const FACT_STATUS_HINTS: Record<FactStatus, string> = {
+  unknown: "暂无该字段的信息，未知不会被当作「否」",
+  unverified: "已记录该字段的值，尚未核实",
+  stated: "客户在沟通中自述，尚未二次复核；分类按已确认处理，建议尽快复核",
+  confirmed: "该字段已人工核实",
 };
 
 export const PRIORITY_BADGE_CLASS: Record<LeadPriority, string> = {
