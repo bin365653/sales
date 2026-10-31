@@ -14,6 +14,7 @@ export const ADMIN_TABS = [
   { key: "prompts", label: "提示词模板" },
   { key: "stages", label: "阶段管理" },
   { key: "fields", label: "字段配置" },
+  { key: "dicts", label: "数据字典" },
   { key: "users", label: "账号管理" },
   { key: "audit", label: "操作日志" },
 ] as const;

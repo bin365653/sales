@@ -100,7 +100,8 @@ async function setupCase(): Promise<{
     name: "AI 验证客户",
     contactName: "王经理",
     contactPhone: "13900001111",
-    currentSystem: "Excel 台账",
+    // V2.0-T02：current_system 字典已启用，取值须 ∈ 预置字典
+    currentSystem: "手工台账（Excel/纸质）",
   });
   return { sales, lead };
 }
@@ -121,7 +122,7 @@ describe("发起 run（快照与前置校验）", () => {
     const serialized = JSON.stringify(run.inputSnapshot);
     expect(serialized).not.toContain("13900001111");
     expect(serialized).not.toContain("contact_phone");
-    expect(serialized).toContain("Excel 台账");
+    expect(serialized).toContain("手工台账（Excel/纸质）");
   });
 
   it("无启用配置时发起失败（409 ai_not_configured）", async () => {

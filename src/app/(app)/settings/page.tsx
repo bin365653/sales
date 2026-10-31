@@ -11,6 +11,12 @@ import {
 } from "@/server/services/users";
 import { listPromptTemplates } from "@/server/services/prompts";
 import { listAuditLogs } from "@/server/services/audit-logs";
+import { listDictEntries } from "@/server/services/dicts";
+import {
+  DICT_FIELD_KEYS,
+  DICT_FIELD_LABELS,
+  isNextGenMeta,
+} from "@/lib/dict";
 import { auditLogQuerySchema } from "@/lib/schemas/settings";
 import { workDateStringSchema } from "@/lib/schemas/worktime";
 import { toShanghaiDateString, toShanghaiDateTimeString } from "@/lib/format";
@@ -26,6 +32,7 @@ import { ModelConfigsManager } from "@/components/settings/model-configs-manager
 import { PromptVersionsManager } from "@/components/settings/prompt-versions-manager";
 import { StagesManager } from "@/components/settings/stages-manager";
 import { FieldsManager } from "@/components/settings/fields-manager";
+import { DictsManager } from "@/components/settings/dicts-manager";
 import { UsersManager } from "@/components/settings/users-manager";
 import { AuditLogsView } from "@/components/settings/audit-logs-view";
 
@@ -103,6 +110,8 @@ async function TabContent({
       return <StagesTab />;
     case "fields":
       return <FieldsTab />;
+    case "dicts":
+      return <DictsTab />;
     case "users":
       return <UsersTab user={user} />;
     case "audit":
@@ -204,6 +213,29 @@ async function FieldsTab() {
     isActive: field.isActive,
   }));
   return <FieldsManager fields={items} />;
+}
+
+// 数据字典页签（V2.0-T02，UIUX §5.3）：本期 12 个字典字段分组维护；
+// 标签以 lead_field_defs 展示名为准，字段固定顺序按 DICT_FIELD_KEYS。
+async function DictsTab() {
+  const [defs, ...entryLists] = await Promise.all([
+    listFieldDefs({ activeOnly: false }),
+    ...DICT_FIELD_KEYS.map((fieldKey) => listDictEntries(fieldKey)),
+  ]);
+  const labelByKey = new Map(defs.map((def) => [def.key, def.label]));
+  const fields = DICT_FIELD_KEYS.map((fieldKey, index) => ({
+    fieldKey,
+    label: labelByKey.get(fieldKey) ?? DICT_FIELD_LABELS[fieldKey] ?? fieldKey,
+    dictEnabled: entryLists[index]!.dictEnabled,
+    entries: entryLists[index]!.entries.map((entry) => ({
+      id: entry.id,
+      value: entry.value,
+      isNextGen: isNextGenMeta(entry.meta),
+      sortOrder: entry.sortOrder,
+      isActive: entry.isActive,
+    })),
+  }));
+  return <DictsManager fields={fields} />;
 }
 
 async function UsersTab({ user }: { user: AuthUser }) {

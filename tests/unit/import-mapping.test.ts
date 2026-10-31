@@ -26,6 +26,8 @@ function fieldDefsOf(builtinKeys: string[], custom: Target[] = [], requiredCusto
       type: target.type ?? "text",
       validation: requiredCustomKeys.includes(target.key) ? { required: true } : undefined,
     })),
+    // V2.0-T02：映射合法性测试不涉及字典校验，传空集合
+    dictValues: new Map<string, Set<string>>(),
   };
 }
 

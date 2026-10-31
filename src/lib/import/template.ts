@@ -71,6 +71,7 @@ function customHint(
  * 组装模板列与填写说明。
  * @param activeBuiltin 启用中的内置字段（key=物理列名）
  * @param activeCustom  启用中的自定义字段（按 sortOrder 排序后传入）
+ * @param dictValues    字典启用字段 → 启用值列表（V2.0-T02：填写说明给出可选值）
  */
 export function buildImportTemplateFields(
   activeBuiltin: { key: string; label: string }[],
@@ -81,6 +82,7 @@ export function buildImportTemplateFields(
     options?: unknown;
     validation?: unknown;
   }[],
+  dictValues?: Map<string, string[]>,
 ): ImportTemplateField[] {
   const builtinByKey = new Map(activeBuiltin.map((field) => [field.key, field]));
   const fields: ImportTemplateField[] = [];
@@ -94,10 +96,14 @@ export function buildImportTemplateFields(
     if (!def) {
       continue;
     }
+    const dictHint = dictValues?.get(key);
+    const hint = dictHint?.length
+      ? `须从字典选择；可选值：${dictHint.join(" / ")}`
+      : (BUILTIN_HINTS[key] ?? "可留空");
     fields.push({
       key,
       label: def.label,
-      hint: BUILTIN_HINTS[key] ?? "可留空",
+      hint,
       example: EXAMPLE_VALUES[key] ?? "",
     });
   }

@@ -87,6 +87,8 @@ export interface LeadDetailClientProps {
   interactions: InteractionView[];
   tasks: TaskView[];
   formValues: Record<string, string | number | boolean | null>;
+  /** V2.0-T02：字典启用字段（defKey）→ 启用值（编辑表单 DictSelect 渲染） */
+  dictOptions?: Record<string, { value: string; isNextGen: boolean }[]>;
   /** AI 面板初始数据（T09）：runs/用量/启用提示词版本，轮询后由面板自行刷新 */
   aiRuns: AiRunView[];
   aiUsage: AiQuotaView;
@@ -116,6 +118,7 @@ export function LeadDetailClient({
   interactions,
   tasks,
   formValues,
+  dictOptions,
   aiRuns,
   aiUsage,
   activePromptVersions,
@@ -307,6 +310,7 @@ export function LeadDetailClient({
             defs={fieldDefs}
             stages={stages}
             initial={formValues}
+            dictOptions={dictOptions}
             onSaved={() => {
               setEditing(false);
               setNotice("资料已保存");

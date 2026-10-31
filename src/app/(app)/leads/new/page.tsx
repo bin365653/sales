@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { listFieldDefs } from "@/server/services/lead-fields";
 import { listStages, getStageBySemanticKey } from "@/server/services/stages";
+import { getActiveDictOptionMap } from "@/server/services/dicts";
 import { NEW_LEAD_STAGE_ANCHOR } from "@/lib/stages";
 import { LeadForm } from "@/components/leads/lead-form";
 import type { FieldDefRow } from "@/lib/lead-form-fields";
@@ -18,10 +19,11 @@ export default async function NewLeadPage() {
     redirect("/login");
   }
 
-  const [defs, stages, defaultStage] = await Promise.all([
+  const [defs, stages, defaultStage, dictMap] = await Promise.all([
     listFieldDefs({ activeOnly: true }),
     listStages({ activeOnly: true }),
     getStageBySemanticKey(NEW_LEAD_STAGE_ANCHOR),
+    getActiveDictOptionMap(),
   ]);
   const fieldDefs: FieldDefRow[] = defs.map((def) => ({
     key: def.key,
@@ -32,6 +34,11 @@ export default async function NewLeadPage() {
     options: def.options,
     validation: def.validation,
   }));
+  // V2.0-T02：字典启用字段的下拉选项（snake defKey → 启用值）
+  const dictOptions: Record<string, { value: string; isNextGen: boolean }[]> = {};
+  for (const [fieldKey, options] of dictMap) {
+    dictOptions[fieldKey] = options;
+  }
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
@@ -42,8 +49,8 @@ export default async function NewLeadPage() {
         </Link>
       </div>
       <p className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-500">
-        除客户名称外全部字段可留空——不逼销售编数据（PRD §5.3）；四个关键事实字段可标记
-        未知 / 待核实 / 已确认。
+        除客户名称外全部字段可留空——不逼销售编数据（PRD §5.3）；关键事实字段可标记
+        未知 / 待核实 / 客户自述待复核 / 已确认；启用字典的字段从下拉选择。
       </p>
       <div className="rounded-lg border border-gray-200 bg-white p-4 md:p-6">
         <LeadForm
@@ -53,6 +60,7 @@ export default async function NewLeadPage() {
           defaultStageId={
             defaultStage?.isActive ? defaultStage.id : stages[0]?.id
           }
+          dictOptions={dictOptions}
         />
       </div>
     </div>

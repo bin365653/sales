@@ -30,6 +30,7 @@ import {
   insertLeadWithEvent,
   resolveDefaultStage,
 } from "@/server/services/leads";
+import { getEnabledDictValueMap } from "@/server/services/dicts";
 import { buildImportTemplateFields, type ImportTemplateField } from "@/lib/import/template";
 
 // 导入服务（T05，实施计划 §4.2 两阶段导入 / §6 导入端点 / M2 重复判定）。
@@ -60,6 +61,8 @@ interface ImportFieldDefs {
   targets: ImportTarget[];
   targetByKey: Map<string, ImportTarget>;
   activeCustomDefs: FieldDefLike[];
+  /** 字典启用字段 → 启用值集合（V2.0-T02：导入值必须 ∈ 启用值） */
+  dictValues: Map<string, Set<string>>;
 }
 
 /** 内置列的布尔/日期语义（导入单元格矫正用） */
@@ -106,6 +109,7 @@ async function loadImportFieldDefs(): Promise<ImportFieldDefs> {
     targets,
     targetByKey: new Map(targets.map((target) => [target.key, target])),
     activeCustomDefs,
+    dictValues: await getEnabledDictValueMap(),
   };
 }
 
@@ -220,6 +224,24 @@ export function validateRowByMapping(
         key: snakeKey,
         label: BUILTIN_LABEL_BY_KEY.get(snakeKey) ?? String(issue.path[0] ?? "字段"),
         message: issue.message,
+      });
+    }
+  }
+  // V2.0-T02：字典启用字段值域校验（错误原因中文准确，与表单同源）
+  const parsedValues: Record<string, unknown> = parsed.success
+    ? (parsed.data as unknown as Record<string, unknown>)
+    : builtinInput;
+  for (const [fieldKey, values] of fieldDefs.dictValues) {
+    const camel = fieldKey.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
+    const value = parsedValues[camel];
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    if (!values.has(String(value))) {
+      errors.push({
+        key: fieldKey,
+        label: BUILTIN_LABEL_BY_KEY.get(fieldKey) ?? fieldKey,
+        message: "需从字典中选择；如无合适选项，请联系管理员在设置中维护字典",
       });
     }
   }
@@ -353,7 +375,15 @@ export async function getImportTemplateFields(): Promise<ImportTemplateField[]> 
       options: def.options,
       validation: def.validation,
     }));
-  return buildImportTemplateFields(activeBuiltin, activeCustom);
+  // V2.0-T02：字典启用字段在填写说明中给出可选值（与表单下拉同源）
+  const dictValueMap = await getEnabledDictValueMap();
+  const dictValues = new Map<string, string[]>();
+  for (const [fieldKey, values] of dictValueMap) {
+    if (activeBuiltinKeys.has(fieldKey)) {
+      dictValues.set(fieldKey, [...values]);
+    }
+  }
+  return buildImportTemplateFields(activeBuiltin, activeCustom, dictValues);
 }
 
 export interface ImportUploadResult {

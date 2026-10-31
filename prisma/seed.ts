@@ -181,12 +181,73 @@ async function seedPromptTemplates(): Promise<void> {
   );
 }
 
+/**
+ * 数据字典 seed（V2.0-T02，决策 D1）：current_system 预置新一代手机开单系统
+ * （舟谱/爱快消/商圈云，meta.isNextGen=true）+ 常见传统系统占位（isNextGen=false）。
+ * 幂等：缺则建；管理员此后的增删改/停用/排序原样保留。
+ * 其余 11 个字典字段初始为空，管理员在设置中心维护（实施计划 §3.1）。
+ */
+const CURRENT_SYSTEM_DICT_SEED: { value: string; isNextGen: boolean }[] = [
+  { value: "舟谱", isNextGen: true },
+  { value: "爱快消", isNextGen: true },
+  { value: "商圈云", isNextGen: true },
+  { value: "管家婆", isNextGen: false },
+  { value: "金蝶精斗云", isNextGen: false },
+  { value: "用友畅捷通", isNextGen: false },
+  { value: "秦丝进销存", isNextGen: false },
+  { value: "手工台账（Excel/纸质）", isNextGen: false },
+];
+
+async function seedCurrentSystemDict(): Promise<void> {
+  const admin = await prisma.user.findFirst({
+    where: { role: "admin" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (!admin) {
+    console.warn("[seed] 无管理员账号，跳过数据字典 seed。");
+    return;
+  }
+  let created = 0;
+  for (const [index, item] of CURRENT_SYSTEM_DICT_SEED.entries()) {
+    const existing = await prisma.dictEntry.findUnique({
+      where: { fieldKey_value: { fieldKey: "current_system", value: item.value } },
+      select: { id: true },
+    });
+    if (existing) {
+      continue;
+    }
+    await prisma.dictEntry.create({
+      data: {
+        fieldKey: "current_system",
+        value: item.value,
+        meta: { isNextGen: item.isNextGen },
+        sortOrder: index + 1,
+        createdBy: admin.id,
+      },
+    });
+    created += 1;
+  }
+  // 字典启用旗标同步（存在 ≥1 启用值即启用，与字典服务同口径）
+  const activeCount = await prisma.dictEntry.count({
+    where: { fieldKey: "current_system", isActive: true },
+  });
+  await prisma.leadFieldDef.updateMany({
+    where: { key: "current_system" },
+    data: { dictEnabled: activeCount > 0 },
+  });
+  console.log(
+    `[seed] current_system 数据字典就绪：共 ${CURRENT_SYSTEM_DICT_SEED.length} 项，本次新建 ${created} 项（dictEnabled=${activeCount > 0}）。`,
+  );
+}
+
 async function main(): Promise<void> {
   await seedStages();
   await seedBuiltinFieldDefs();
   await migrateBuiltinFieldLabels();
   await seedAdmin();
   await seedPromptTemplates();
+  await seedCurrentSystemDict();
 }
 
 main()

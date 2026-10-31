@@ -29,6 +29,7 @@ import {
   ComputedVerificationWrites,
   VerificationSourceValue,
 } from "@/server/services/lead-verifications";
+import { getEnabledDictValueMap } from "@/server/services/dicts";
 
 // 线索服务（T03）：新建/编辑/详情/软删除/阶段流转/列表。
 // 关键不变量：
@@ -125,6 +126,38 @@ function throwCustomIssues(issues: FieldIssue[]): void {
     "custom_field_invalid",
     `自定义字段校验未通过（${rendered}${issues.length > 5 ? " 等" : ""}）`,
   );
+}
+
+/**
+ * 字典启用字段值域校验（V2.0-T02，实施计划 §3.1）：
+ * dict_enabled=true 的字段，新建/编辑提交的非空值必须 ∈ 字典启用值；
+ * 存量非字典值可继续显示，编辑时须改选（不静默改写，R2）。
+ * 校验只针对本次提交的键（未触及字段不校验）。
+ */
+async function assertDictValues(
+  submitted: Record<string, unknown>,
+  defSet: FieldDefSet,
+): Promise<void> {
+  const dictMap = await getEnabledDictValueMap();
+  if (dictMap.size === 0) {
+    return;
+  }
+  for (const [fieldKey, values] of dictMap) {
+    const camel = fieldKey.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+    const value = submitted[camel];
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    if (!values.has(String(value))) {
+      const label =
+        defSet.builtin.find((def) => def.key === fieldKey)?.label ?? fieldKey;
+      throw new ApiError(
+        400,
+        "dict_value_invalid",
+        `「${label}」需从字典中选择；如无合适选项，请联系管理员在设置中维护字典`,
+      );
+    }
+  }
 }
 
 // ---------- 数据映射（camelCase 入参 → Prisma 列） ----------
@@ -412,6 +445,9 @@ export async function createLead(
   const custom = checkCustomValues(defSet, input.customValues ?? {}, true);
   throwCustomIssues(custom.issues);
 
+  // V2.0-T02：字典启用字段值域校验（新建提交即须 ∈ 字典启用值）
+  await assertDictValues(input as unknown as Record<string, unknown>, defSet);
+
   const customValues = Object.keys(custom.values).length
     ? (custom.values as Prisma.InputJsonValue)
     : undefined;
@@ -531,6 +567,10 @@ export async function updateLead(
   const providedCustom = input.customValues ?? {};
   const custom = checkCustomValues(defSet, providedCustom, false);
   throwCustomIssues(custom.issues);
+
+  // V2.0-T02：字典启用字段值域校验（只校验本次提交的键；存量非字典值可显示，
+  // 编辑时须改选——提交旧的非字典值同样拒绝，不静默改写）
+  await assertDictValues(input as unknown as Record<string, unknown>, defSet);
 
   // 合并语义：提交键先移除（null = 清空），再回填本次合法值；未触及键保持原值
   const stored = (existing.customValues ?? {}) as Record<string, unknown>;

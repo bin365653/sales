@@ -11,6 +11,7 @@ import { listLeadAiRuns } from "@/server/ai/runner";
 import { getTodayUsage } from "@/server/ai/rate-limit";
 import { resolveActivePromptVersion } from "@/server/ai/prompt-registry";
 import { getRunningExperimentGroups } from "@/server/services/experiments";
+import { getActiveDictOptionMap } from "@/server/services/dicts";
 import { toAiRunView, type AiRunView } from "@/lib/ai-run-view";
 import type { RunTypeValue } from "@/lib/schemas/ai";
 import {
@@ -115,7 +116,7 @@ export default async function LeadDetailPage({
     notFound();
   }
 
-  const [defs, stages, actorNames, interactions, tasks] = await Promise.all([
+  const [defs, stages, actorNames, interactions, tasks, dictMap] = await Promise.all([
     listFieldDefs({ activeOnly: false }),
     listStages({ activeOnly: true }),
     getUserNames(
@@ -125,6 +126,7 @@ export default async function LeadDetailPage({
     ),
     listInteractions(user, id),
     listLeadTasks(user, id),
+    getActiveDictOptionMap(),
   ]);
 
   // AI 面板初始数据（T09）：首屏整形与客户端轮询共用 toAiRunView；
@@ -404,6 +406,7 @@ export default async function LeadDetailPage({
       interactions={interactionRows}
       tasks={taskViews}
       formValues={formValues}
+      dictOptions={Object.fromEntries(dictMap)}
       aiRuns={aiRuns}
       aiUsage={aiUsage}
       activePromptVersions={activePromptVersions}

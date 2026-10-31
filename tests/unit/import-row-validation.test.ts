@@ -23,6 +23,8 @@ function makeFieldDefs(builtin: { key: string; label: string }[], custom: Target
     targets,
     targetByKey: new Map(targets.map((target) => [target.key, target])),
     activeCustomDefs: custom as FieldDefLike[],
+    // V2.0-T02：行级校验测试默认无字典启用字段
+    dictValues: new Map<string, Set<string>>(),
   };
 }
 

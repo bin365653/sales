@@ -177,6 +177,40 @@ export type StageUpdateInput = z.infer<typeof stageUpdateSchema>;
 export type FieldDefCreateInput = z.infer<typeof fieldDefCreateSchema>;
 export type FieldDefUpdateInput = z.infer<typeof fieldDefUpdateSchema>;
 
+// ---------- 数据字典（V2.0-T02，实施计划 §3.1 / 决策 D1） ----------
+// 字典值即标准存储值（value 写入 leads 列），无独立 label；
+// meta 仅 current_system 使用（isNextGen 新一代标记，驱动表单建议条）。
+
+export const dictEntryCreateSchema = z.object({
+  value: z
+    .string()
+    .trim()
+    .min(1, "请输入字典值")
+    .max(128, "字典值不能超过 128 字"),
+  meta: z.record(z.string(), z.unknown()).optional(),
+  sortOrder: z.coerce.number().int().min(1, "排序值须为正整数").max(9999).optional(),
+});
+
+/** 改值 = 换标准存储值（存量行不迁移，显示为不在字典中）；停用/启用走 isActive */
+export const dictEntryUpdateSchema = z
+  .object({
+    value: z
+      .string()
+      .trim()
+      .min(1, "请输入字典值")
+      .max(128, "字典值不能超过 128 字")
+      .optional(),
+    meta: z.record(z.string(), z.unknown()).optional(),
+    sortOrder: z.coerce.number().int().min(1).max(9999).optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((value) => Object.values(value).some((v) => v !== undefined), {
+    message: "请至少提供一项要修改的内容",
+  });
+
+export type DictEntryCreateInput = z.infer<typeof dictEntryCreateSchema>;
+export type DictEntryUpdateInput = z.infer<typeof dictEntryUpdateSchema>;
+
 // ---------- 账号管理（T15，UIUX P9：管理员建号/重置密码/停用启用；无删除） ----------
 
 const usernameSchema = z

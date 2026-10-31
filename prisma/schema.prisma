@@ -136,6 +136,30 @@ model LeadFieldDef {
   @@map("lead_field_defs")
 }
 
+// ---------- 数据字典（V2.0-T02，实施计划 §3.1 / 决策 D1 / D5） ----------
+// 画像字典字段的值域：下拉选择来源；current_system 专用 meta.isNextGen
+// 标记驱动「新一代手机开单」建议（4.7 人工确认流，建议必经确认原则9）。
+// fieldKey 白名单 = src/lib/dict.ts DICT_FIELD_KEYS（12 个画像字段）；
+// 删除仅提供停用（isActive=false，与阶段管理一致），无物理删除。
+// 字典启用状态物化在 lead_field_defs.dict_enabled：字段存在 ≥1 启用值即启用，
+// 由字典服务在每次写入后同步（T02 验收：启用后新建/编辑/导入值必须 ∈ 启用值）。
+
+model DictEntry {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  fieldKey  String   @map("field_key") @db.VarChar(64)
+  value     String   @db.VarChar(128)
+  meta      Json?    @db.JsonB
+  sortOrder Int      @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdBy String   @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([fieldKey, value])
+  @@index([fieldKey, isActive, sortOrder])
+  @@map("dict_entries")
+}
+
 // ---------- 字段核实元数据（V2.0-T01，实施计划 §3.1 五元组 + P2 四态） ----------
 // 每个客户每个可核实字段一行（unique(lead_id, field_key)）：状态四态
 // （unknown/unverified/stated/confirmed）+ 来源 + 核实人 + 核实时间 + 备注。

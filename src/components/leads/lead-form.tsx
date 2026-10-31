@@ -32,6 +32,12 @@ const TEXTAREA_CLASS =
 const SELECT_CLASS =
   "h-10 w-full rounded-md border border-gray-300 bg-white px-2 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 
+export interface LeadFormDictOption {
+  value: string;
+  /** current_system 专用：新一代手机开单标记（决策 D1，建议条联动） */
+  isNextGen: boolean;
+}
+
 export interface LeadFormProps {
   mode: "create" | "edit";
   /** 编辑时必填 */
@@ -45,6 +51,8 @@ export interface LeadFormProps {
   defaultStageId?: string;
   /** 编辑初值：表单字段名 → 值（布尔以 true/false 字符串或布尔值；空 = 空输入） */
   initial?: Record<string, string | number | boolean | null>;
+  /** V2.0-T02：字典启用字段（defKey）→ 启用值列表；缺省字段按自由文本渲染 */
+  dictOptions?: Record<string, LeadFormDictOption[]>;
   /** 编辑保存成功回调（详情页切回查看态）；新建固定跳转详情页 */
   onSaved?: () => void;
   onCancel?: () => void;
@@ -66,6 +74,7 @@ export function LeadForm({
   stages,
   defaultStageId,
   initial,
+  dictOptions,
   onSaved,
   onCancel,
 }: LeadFormProps) {
@@ -73,6 +82,12 @@ export function LeadForm({
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // V2.0-T02（决策 D1 / 4.7 流程）：current_system 命中新一代字典项时的建议条。
+  // 建议 = info 条呈现，预填但不生效；[采纳建议] 后随保存写入
+  // next_gen_mobile_order=是 + 核实状态=已核实（来源：软件字典建议，人工确认）；
+  // [忽略] 或改选其他值 → 建议消失（未知不当是）。
+  const [nextGenSuggestion, setNextGenSuggestion] = useState<string | null>(null);
+  const [nextGenAdopted, setNextGenAdopted] = useState(false);
 
   const builtinFields = buildBuiltinFormFields(defs);
   const customFields = buildCustomFormFields(defs);
@@ -123,6 +138,13 @@ export function LeadForm({
         typeof raw === "string" && raw === "" ? null : raw;
     }
     payload.customValues = customValues;
+
+    // V2.0-T02（决策 D1）：新一代建议已采纳且未被手改 → 随保存写入
+    // 是否新一代=是 + 核实状态=已核实（来源：软件字典建议，人工确认）
+    if (nextGenAdopted) {
+      payload.nextGenMobileOrder = "true";
+      payload.verifications = { next_gen_mobile_order: "confirmed" };
+    }
 
     // 前置校验：与 API 同一份 Schema + 自定义字段引擎
     const errors: Record<string, string> = {};
@@ -214,6 +236,12 @@ export function LeadForm({
                     (item) => item.valueKey === field.key,
                   ) ?? null;
                 const error = fieldErrors[field.key];
+                // V2.0-T02：字典启用字段渲染为下拉（值域受字典约束）
+                const dictField = dictOptions?.[field.defKey];
+                const currentValue = initialOf(initial, field.key);
+                const currentValueInDict =
+                  currentValue === "" ||
+                  (dictField?.some((option) => option.value === currentValue) ?? false);
                 return (
                   <div
                     key={field.key}
@@ -228,6 +256,14 @@ export function LeadForm({
                       {field.label}
                       {field.key === "name" && (
                         <span className="ml-0.5 text-red-500">*</span>
+                      )}
+                      {dictField && dictField.length > 0 && (
+                        <span
+                          title="该字段已启用数据字典，取值从字典选择"
+                          className="ml-1.5 rounded border border-gray-200 px-1 py-0.5 align-middle text-xs font-normal text-gray-400"
+                        >
+                          字典
+                        </span>
                       )}
                     </label>
                     <div className="flex gap-2">
@@ -244,11 +280,46 @@ export function LeadForm({
                           id={`f-${field.key}`}
                           name={field.key}
                           defaultValue={initialOf(initial, field.key)}
+                          onChange={
+                            field.key === "nextGenMobileOrder"
+                              ? () => setNextGenAdopted(false)
+                              : undefined
+                          }
                           className={SELECT_CLASS}
                         >
                           <option value="">未确认</option>
                           <option value="true">是</option>
                           <option value="false">否</option>
+                        </select>
+                      ) : dictField && dictField.length > 0 ? (
+                        <select
+                          id={`f-${field.key}`}
+                          name={field.key}
+                          defaultValue={currentValue}
+                          onChange={(event) => {
+                            if (field.defKey === "current_system") {
+                              const option = dictField.find(
+                                (item) => item.value === event.target.value,
+                              );
+                              setNextGenSuggestion(
+                                option?.isNextGen ? option.value : null,
+                              );
+                              setNextGenAdopted(false);
+                            }
+                          }}
+                          className={SELECT_CLASS}
+                        >
+                          <option value="">（未选择）</option>
+                          {!currentValueInDict && (
+                            <option value={currentValue}>
+                              当前值：{currentValue}（不在字典中，保存时请重新选择）
+                            </option>
+                          )}
+                          {dictField.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.value}
+                            </option>
+                          ))}
                         </select>
                       ) : (
                         <input
@@ -283,6 +354,39 @@ export function LeadForm({
                       )}
                     </div>
                     {error && <p className="text-xs text-red-600">{error}</p>}
+                    {field.defKey === "current_system" && nextGenSuggestion && (
+                      <div className="rounded-md border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs leading-relaxed text-blue-800 sm:col-span-1">
+                        {nextGenAdopted ? (
+                          <>
+                            已采纳建议：「{nextGenSuggestion}」属于新一代手机开单系统，
+                            保存后 是否新一代手机开单=是（已核实 · 来源：软件字典建议，人工确认）。
+                          </>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span>
+                              ⓘ 根据软件字典，「{nextGenSuggestion}」属于新一代手机开单系统。
+                              点「采纳建议」预填建议值「是」，核实后保存生效。
+                            </span>
+                            <span className="flex shrink-0 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setNextGenAdopted(true)}
+                                className="rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-50"
+                              >
+                                采纳建议
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setNextGenSuggestion(null)}
+                                className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-500 transition hover:bg-gray-50"
+                              >
+                                忽略
+                              </button>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
