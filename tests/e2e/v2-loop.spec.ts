@@ -119,4 +119,12 @@ test("V2 闭环：建档→确认象限→月度任务→重算→约定任务�
   await expect(page.getByText("D·第四象限").first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("分类变化").first()).toBeVisible();
   await expect(page.getByText(/C·第三象限 → D·第四象限/).first()).toBeVisible();
+
+  // ---------- ⑦ AI 跟进策略助手（V2.0-T11 第三入口）：原因解释 + 沟通建议 ----------
+  await page.getByRole("button", { name: "✦ AI 跟进策略助手" }).click();
+  await expect(page.getByText("为什么现在联系这位客户").first()).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(page.getByText("E2E Mock").first()).toBeVisible();
+  await expect(page.getByText(/AI 建议不会自动修改客户画像、分类、到期时间或销售阶段/).first()).toBeVisible();
 });

@@ -48,3 +48,42 @@ export const ANALYSIS_OUTPUT_SCHEMA = {
   },
   notes: "对齐 PRD §5.4 八项输出；facts.status 区分已知事实与待核实信息",
 };
+
+// ---------- analysis v2（V2.0-T11，实施计划 §7 / PRD 模块八 画像补充助手） ----------
+// 在 v1 八项结构上新增：缺失信息 gaps[]、信息矛盾 contradictions[]；
+// 「本次建议核实的 3 个问题」= verify_questions 恰 3 条；
+// 输入新增 profile_v2 组（象限/完善度/核实状态汇总/到期月，快照仍无联系方式）。
+
+export const ANALYSIS_V2_SYSTEM_PROMPT = `${ANALYSIS_SYSTEM_PROMPT}
+
+【V2.0 增补——画像补充助手（在上述红线之上追加）】
+1. 输入资料含 profile_v2 组：quadrant_code（四象限分类，null=画像待完善）、
+   profile_status（完善度）、contract_expiry_month（软件到期月，null=未知）、
+   verification_summary（各字段核实状态：unknown/unverified/stated/confirmed）。
+2. gaps（缺失信息）：对 verification_summary 中状态非 confirmed/stated 的画像字段，
+   逐条列出 { field, question }——field 用输入字段名，question 是电话中可直问的一句话；
+   最多 8 条，已核实字段不要进入 gaps。
+3. contradictions（信息矛盾）：若输入资料中存在互相冲突的信息（如客户自述在用系统
+   与字典标记的新一代属性冲突、沟通记录与画像字段不一致），逐条列出
+   { conflict, suggestion }——conflict 描述冲突本身（引用双方原话），suggestion 给出
+   建议核实动作；最多 3 条；无矛盾输出空数组，不得杜撰矛盾。
+4. verify_questions：恰好 3 条（本次电话建议核实的问题），优先覆盖 gaps 中最重要的项。
+5. gaps 中的 field 必须来自输入资料的画像字段名，不得虚构字段。`;
+
+export const ANALYSIS_V2_OUTPUT_SCHEMA = {
+  type: "object",
+  fields: {
+    ...ANALYSIS_OUTPUT_SCHEMA.fields,
+    gaps: {
+      array_of: { field: "string（画像字段名）", question: "建议核实话术" },
+      max: 8,
+      note: "缺失信息：核实状态非 confirmed/stated 的画像字段",
+    },
+    contradictions: {
+      array_of: { conflict: "冲突描述（引用双方原话）", suggestion: "建议核实动作" },
+      max: 3,
+      note: "信息矛盾：输入资料中互相冲突的信息；无矛盾输出空数组",
+    },
+  },
+  notes: "V2 = PRD §5.4 八项 + 模块八画像补充助手（缺失信息/信息矛盾/3 个核实问题）",
+};

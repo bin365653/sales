@@ -3,7 +3,10 @@ import { hash } from "@node-rs/argon2";
 import { PrismaClient } from "@prisma/client";
 import { PRESET_STAGES } from "../src/lib/stages";
 import { BUILTIN_LEAD_FIELDS } from "../src/lib/lead-fields";
-import { PROMPT_TEMPLATE_SEEDS } from "../src/server/ai/prompts";
+import {
+  PROMPT_TEMPLATE_SEEDS,
+  PROMPT_UPGRADE_SEEDS,
+} from "../src/server/ai/prompts";
 
 // Algorithm.Argon2id 的值（库的 ambient const enum 在 isolatedModules 下不可引用成员）
 const ARGON2ID = 2;
@@ -303,12 +306,59 @@ async function seedFollowUpPolicies(): Promise<void> {
   );
 }
 
+/**
+ * V2.0-T11 提示词版本升级（版本只增不改）：仅当模板当前最高版本内容仍是
+ * v1 种子内容（管理员未改动）时追加 v2；管理员已自定义的模板原样保留。
+ */
+async function seedPromptUpgrades(): Promise<void> {
+  const admin = await prisma.user.findFirst({
+    where: { role: "admin" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (!admin) {
+    console.warn("[seed] 无管理员账号，跳过提示词版本升级。");
+    return;
+  }
+  let upgraded = 0;
+  for (const item of PROMPT_UPGRADE_SEEDS) {
+    const template = await prisma.promptTemplate.findUnique({
+      where: { runType: item.runType },
+      select: { id: true },
+    });
+    if (!template) {
+      continue;
+    }
+    const latest = await prisma.promptVersion.findFirst({
+      where: { templateId: template.id },
+      orderBy: { version: "desc" },
+      select: { version: true, content: true },
+    });
+    if (!latest || latest.content !== item.baselineContent) {
+      // 管理员已改过当前版本或已有更高版本：不覆盖
+      continue;
+    }
+    await prisma.promptVersion.create({
+      data: {
+        templateId: template.id,
+        version: latest.version + 1,
+        content: item.nextContent,
+        outputSchema: item.nextOutputSchema as object,
+        createdBy: admin.id,
+      },
+    });
+    upgraded += 1;
+  }
+  console.log(`[seed] 提示词版本升级就绪：本次新建 ${upgraded} 个版本。`);
+}
+
 async function main(): Promise<void> {
   await seedStages();
   await seedBuiltinFieldDefs();
   await migrateBuiltinFieldLabels();
   await seedAdmin();
   await seedPromptTemplates();
+  await seedPromptUpgrades();
   await seedCurrentSystemDict();
   await seedFollowUpPolicies();
 }

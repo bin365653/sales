@@ -1,9 +1,15 @@
 import { z } from "zod";
 
 // AI 入参 Schema（T08，实施计划 §6 AI / 设置端点、§7.1 模块划分）。
-// run_type 三类贯穿 ai_runs / prompt_templates / 校验器（§4.2、§7.1）。
+// run_type 四类贯穿 ai_runs / prompt_templates / 校验器（§4.2、§7.1）；
+// followup_advice（V2.0-T11）：跟进策略助手（实施计划 §7）。
 
-export const RUN_TYPES = ["analysis", "call_prep", "interaction_summary"] as const;
+export const RUN_TYPES = [
+  "analysis",
+  "call_prep",
+  "interaction_summary",
+  "followup_advice",
+] as const;
 
 export type RunTypeValue = (typeof RUN_TYPES)[number];
 
@@ -15,12 +21,14 @@ export const RUN_TYPE_LABELS: Record<RunTypeValue, string> = {
   analysis: "AI 客户分析",
   call_prep: "AI 电话准备卡",
   interaction_summary: "AI 生成摘要",
+  followup_advice: "AI 跟进策略助手",
 };
 
 export const RUN_TYPE_BADGE_CLASS: Record<RunTypeValue, string> = {
   analysis: "bg-violet-50 text-violet-700",
   call_prep: "bg-violet-50 text-violet-700",
   interaction_summary: "bg-violet-50 text-violet-700",
+  followup_advice: "bg-violet-50 text-violet-700",
 };
 
 /** POST /api/ai/runs 与 retry 共用 */

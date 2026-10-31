@@ -36,6 +36,26 @@ export const analysisSchema = z.object({
   angles: z.array(z.string().min(1).max(500)).max(5),
   next_action: z.string().min(1).max(1000),
   verify_questions: z.array(z.string().min(1).max(500)).max(10),
+  // —— V2.0-T11 analysis v2（实施计划 §7）：可选新增两段——旧 v1 输出
+  // （无这两键）仍可解析（历史留痕可读），新 v2 输出必须携带
+  gaps: z
+    .array(
+      z.object({
+        field: z.string().min(1).max(64),
+        question: z.string().min(1).max(500),
+      }),
+    )
+    .max(10)
+    .optional(),
+  contradictions: z
+    .array(
+      z.object({
+        conflict: z.string().min(1).max(500),
+        suggestion: z.string().min(1).max(500),
+      }),
+    )
+    .max(5)
+    .optional(),
 });
 
 export type AnalysisOutput = z.infer<typeof analysisSchema>;
@@ -73,7 +93,22 @@ export const interactionSummarySchema = z.object({
 
 export type InteractionSummaryOutput = z.infer<typeof interactionSummarySchema>;
 
-export type ValidatedOutput = AnalysisOutput | CallPrepOutput | InteractionSummaryOutput;
+// ---------- followup_advice（V2.0-T11，实施计划 §7 / PRD 模块八） ----------
+// 跟进策略助手：解释系统任务产生原因（必须与输入 followup_context 的任务
+// 来源/策略快照一致，提示词红线不允许编造策略）+ 沟通建议。
+
+export const followupAdviceSchema = z.object({
+  reason_explanation: z.string().min(1).max(2000),
+  communication_advice: z.string().min(1).max(2000),
+});
+
+export type FollowupAdviceOutput = z.infer<typeof followupAdviceSchema>;
+
+export type ValidatedOutput =
+  | AnalysisOutput
+  | CallPrepOutput
+  | InteractionSummaryOutput
+  | FollowupAdviceOutput;
 
 export type OutputParseResult =
   | { ok: true; data: ValidatedOutput }
@@ -98,6 +133,8 @@ function schemaFor(runType: string): z.ZodType<ValidatedOutput> | null {
       return callPrepSchema;
     case "interaction_summary":
       return interactionSummarySchema;
+    case "followup_advice":
+      return followupAdviceSchema;
     default:
       return null;
   }

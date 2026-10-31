@@ -4,7 +4,12 @@ import { ApiError } from "@/server/http/api";
 import { AuthUser } from "@/lib/auth";
 import { AiRunCreateInput } from "@/lib/schemas/ai";
 import { assertLeadReadable, assertLeadWritable } from "@/server/permissions";
-import { buildAiInput, extractRawNotes, RAW_INTERACTION_NOTES_KEY } from "./context";
+import {
+  buildAiInput,
+  buildFollowupContext,
+  extractRawNotes,
+  RAW_INTERACTION_NOTES_KEY,
+} from "./context";
 import { decryptApiKey } from "./crypto";
 import { assertAiAllowedForLead } from "./guard";
 import { getActiveEndpoint } from "./model-configs";
@@ -81,10 +86,12 @@ async function requireRunWithAccess(actor: AuthUser, runId: string) {
 }
 
 /** 输入快照：按线索当前数据重建（重试场景同样取最新快照 + data_version）；
- * notes（T10，仅 interaction_summary）并入快照留痕，重试按原 notes 取回 */
+ * notes（T10，仅 interaction_summary）并入快照留痕，重试按原 notes 取回；
+ * followup_advice（V2.0-T11）追加 followup_context（任务来源+策略快照，服务端生成） */
 async function snapshotForLead(
   leadId: string,
   notes?: string,
+  runType?: AiRunCreateInput["runType"],
 ): Promise<{
   snapshot: Prisma.InputJsonValue;
   inputDataVersion: number;
@@ -96,17 +103,44 @@ async function snapshotForLead(
   if (!lead) {
     throw new ApiError(404, "not_found", "客户不存在");
   }
-  const interactions = await prisma.interaction.findMany({
-    where: { leadId: lead.id },
-    orderBy: { occurredAt: "desc" },
-    take: 5,
+  const [interactions, verifications] = await Promise.all([
+    prisma.interaction.findMany({
+      where: { leadId: lead.id },
+      orderBy: { occurredAt: "desc" },
+      take: 5,
+    }),
+    prisma.leadFieldVerification.findMany({
+      where: { leadId: lead.id },
+      select: { fieldKey: true, status: true },
+    }),
+  ]);
+  const snapshot = buildAiInput(lead, interactions, {
+    verifications: verifications.map((row) => ({
+      fieldKey: row.fieldKey,
+      status: row.status,
+    })),
   });
-  const snapshot = buildAiInput(lead, interactions);
   if (notes !== undefined) {
     snapshot[RAW_INTERACTION_NOTES_KEY] = {
       note: "销售口述/粘贴的原始沟通内容（未整理，仅供本次摘要任务使用）",
       content: notes,
     };
+  }
+  if (runType === "followup_advice") {
+    // 任务来源+策略快照（服务端生成；§7：AI 解释必须与其一致）
+    const pendingTasks = await prisma.task.findMany({
+      where: { leadId: lead.id, status: "pending" },
+      select: {
+        sourceType: true,
+        title: true,
+        dueAt: true,
+        priority: true,
+        policy: { select: { name: true, quadrantCode: true, intervalDays: true } },
+      },
+      orderBy: [{ priority: "asc" }, { dueAt: "asc" }],
+      take: 10,
+    });
+    snapshot.followup_context = buildFollowupContext(pendingTasks);
   }
   return {
     snapshot: snapshot as Prisma.InputJsonValue,
@@ -152,7 +186,11 @@ export async function createAiRun(
   const endpoint = await getActiveEndpoint();
   const prompt = await resolveActivePromptVersion(input.runType);
 
-  const { snapshot, inputDataVersion } = await snapshotForLead(lead.id, input.notes);
+  const { snapshot, inputDataVersion } = await snapshotForLead(
+    lead.id,
+    input.notes,
+    input.runType,
+  );
 
   const run = await prisma.aiRun.create({
     data: {
@@ -306,7 +344,11 @@ export async function retryAiRun(
     previous.runType === "interaction_summary"
       ? extractRawNotes(previous.inputSnapshot)
       : undefined;
-  const { snapshot, inputDataVersion } = await snapshotForLead(previous.leadId, notes);
+  const { snapshot, inputDataVersion } = await snapshotForLead(
+    previous.leadId,
+    notes,
+    previous.runType,
+  );
 
   const run = await prisma.aiRun.create({
     data: {

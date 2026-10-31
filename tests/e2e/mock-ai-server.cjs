@@ -51,12 +51,25 @@ function interactionSummaryOutput() {
   };
 }
 
+// V2.0-T11 跟进策略助手：原因解释（与任务来源一致）+ 沟通建议
+function followupAdviceOutput() {
+  return {
+    reason_explanation:
+      "E2E Mock：该客户由系统按到期月度强制规则生成本月跟进任务（软件处于半年内窗口）。",
+    communication_advice:
+      "E2E Mock 建议：结合象限经营建议核实续费意向，并确认当前系统的使用痛点。",
+  };
+}
+
 function pickOutput(systemText) {
   if (systemText.includes("电话准备卡")) {
     return callPrepOutput();
   }
   if (systemText.includes("沟通摘要")) {
     return interactionSummaryOutput();
+  }
+  if (systemText.includes("跟进策略助手")) {
+    return followupAdviceOutput();
   }
   return analysisOutput();
 }

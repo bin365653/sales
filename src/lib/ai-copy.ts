@@ -2,9 +2,11 @@ import {
   analysisSchema,
   callPrepSchema,
   interactionSummarySchema,
+  followupAdviceSchema,
   type AnalysisOutput,
   type CallPrepOutput,
   type InteractionSummaryOutput,
+  type FollowupAdviceOutput,
 } from "@/server/ai/validator";
 import type { RunTypeValue } from "@/lib/schemas/ai";
 
@@ -98,6 +100,20 @@ export function formatInteractionSummaryCopy(
   return `${sections.join("\n\n")}\n${COPY_FOOTER}`;
 }
 
+/** V2.0-T11 跟进策略助手：原因解释 + 沟通建议 */
+export function formatFollowupAdviceCopy(
+  leadName: string,
+  generatedAtDisplay: string,
+  output: FollowupAdviceOutput,
+): string {
+  const sections: string[] = [
+    `【AI 跟进策略助手】客户:${leadName}  生成时间:${generatedAtDisplay}`,
+    `■ 为什么现在联系这位客户\n${output.reason_explanation}`,
+    `■ 沟通建议\n${output.communication_advice}`,
+  ];
+  return `${sections.join("\n\n")}\n${COPY_FOOTER}`;
+}
+
 /** 按 run 类型分发；输出先经与后端同一份 Zod Schema 校验（结构异常返回 null，
  * 调用方提示复制失败），不信任历史数据形态 */
 export function formatAiRunCopy(
@@ -126,6 +142,12 @@ export function formatAiRunCopy(
       const verdict = interactionSummarySchema.safeParse(output);
       return verdict.success
         ? formatInteractionSummaryCopy(leadName, generatedAtDisplay, verdict.data)
+        : null;
+    }
+    if (runType === "followup_advice") {
+      const verdict = followupAdviceSchema.safeParse(output);
+      return verdict.success
+        ? formatFollowupAdviceCopy(leadName, generatedAtDisplay, verdict.data)
         : null;
     }
   } catch {

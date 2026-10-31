@@ -706,10 +706,13 @@ model PromptVersion {
 // 每次调用全量留痕（PRD §5.5/§6.8）：输入快照（白名单字段，无联系方式/密钥）+
 // data_version + 输出经校验后才写入 output + 状态/耗时/错误类型。
 // status=pending 创建后异步执行（§7.2 单机异步 + 前端轮询，接口预留 status 平滑换队列）。
+// followup_advice（V2.0-T11）：跟进策略助手——解释系统任务产生原因 + 沟通建议
+// （实施计划 §7；原因必须与任务来源/策略快照一致，不允许编造策略）。
 enum ai_run_type {
   analysis
   call_prep
   interaction_summary
+  followup_advice
 }
 
 enum ai_run_status {

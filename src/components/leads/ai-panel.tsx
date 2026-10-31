@@ -12,7 +12,7 @@ import {
 import { toAiRunView, type AiRunView } from "@/lib/ai-run-view";
 import { formatAiRunCopy } from "@/lib/ai-copy";
 import { toShanghaiDateTimeString } from "@/lib/format";
-import { analysisSchema, callPrepSchema, interactionSummarySchema, type AnalysisOutput, type CallPrepOutput, type InteractionSummaryOutput } from "@/server/ai/validator";
+import { analysisSchema, callPrepSchema, interactionSummarySchema, followupAdviceSchema, type AnalysisOutput, type CallPrepOutput, type InteractionSummaryOutput, type FollowupAdviceOutput } from "@/server/ai/validator";
 
 // 详情页 AI 面板（T09/T10，UIUX §4.7/§6.2 全产品唯一 AI 交互模板）：
 // - 触发：入口按钮常驻用量行；同一客户已有 pending run 时按钮禁用（防并发重复调用，
@@ -65,6 +65,11 @@ function asCallPrep(output: unknown): CallPrepOutput | null {
 
 function asInteractionSummary(output: unknown): InteractionSummaryOutput | null {
   const verdict = interactionSummarySchema.safeParse(output);
+  return verdict.success ? verdict.data : null;
+}
+
+function asFollowupAdvice(output: unknown): FollowupAdviceOutput | null {
+  const verdict = followupAdviceSchema.safeParse(output);
   return verdict.success ? verdict.data : null;
 }
 
@@ -195,6 +200,39 @@ function AnalysisResultView({ output }: { output: AnalysisOutput }) {
       <Section title="信息不足时需向客户核实的问题">
         <BulletList items={output.verify_questions} tone="inference" />
       </Section>
+      {/* V2.0-T11 analysis v2：缺失信息（琥珀）与信息矛盾（红描边） */}
+      {output.gaps && output.gaps.length > 0 && (
+        <Section title="缺失信息（建议本次核实）">
+          <ul className="flex flex-col gap-1">
+            {output.gaps.map((gap, index) => (
+              <li key={index} className="flex items-start gap-2 text-sm text-gray-800">
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                <span>
+                  {gap.field}
+                  <span className="mt-0.5 block text-xs text-amber-700">{gap.question}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+      {output.contradictions && output.contradictions.length > 0 && (
+        <Section title="信息矛盾（建议核实澄清）">
+          <ul className="flex flex-col gap-2">
+            {output.contradictions.map((item, index) => (
+              <li
+                key={index}
+                className="rounded-md border border-red-200 bg-red-50/60 px-3 py-2 text-sm text-red-700"
+              >
+                冲突：{item.conflict}
+                <span className="mt-0.5 block text-xs text-red-600/90">
+                  建议：{item.suggestion}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
     </div>
   );
 }
@@ -268,6 +306,24 @@ function InteractionSummaryResultView({ output }: { output: InteractionSummaryOu
   );
 }
 
+/** V2.0-T11 跟进策略助手（UIUX §5.7）：原因解释 + 沟通建议；
+ * 原因部分由服务端快照（任务来源/策略）约束，AI 只做解释 */
+function FollowupAdviceResultView({ output }: { output: FollowupAdviceOutput }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <Section title="为什么现在联系这位客户">
+        <p>{output.reason_explanation}</p>
+      </Section>
+      <Section title="沟通建议">
+        <p>{output.communication_advice}</p>
+      </Section>
+      <p className="rounded-md border border-dashed border-gray-300 px-3 py-2 text-xs text-gray-500">
+        ⓘ AI 建议不会自动修改客户画像、分类、到期时间或销售阶段；采纳需人工确认。
+      </p>
+    </div>
+  );
+}
+
 function RunOutputView({ run }: { run: AiRunView }) {
   if (run.status === "pending") {
     return null;
@@ -293,6 +349,14 @@ function RunOutputView({ run }: { run: AiRunView }) {
       const output = asInteractionSummary(run.output);
       return output ? (
         <InteractionSummaryResultView output={output} />
+      ) : (
+        <p className="text-sm text-gray-500">输出内容无法解析，可在历史中重试。</p>
+      );
+    }
+    if (run.runType === "followup_advice") {
+      const output = asFollowupAdvice(run.output);
+      return output ? (
+        <FollowupAdviceResultView output={output} />
       ) : (
         <p className="text-sm text-gray-500">输出内容无法解析，可在历史中重试。</p>
       );
@@ -552,6 +616,15 @@ export function AiPanel({
           className="rounded-md border border-violet-300 bg-white px-3 py-1.5 text-sm font-medium text-violet-700 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           ✦ AI 电话准备卡
+        </button>
+        {/* V2.0-T11：第三入口——跟进策略助手（解释系统任务产生原因 + 沟通建议） */}
+        <button
+          type="button"
+          onClick={() => void startRun("followup_advice")}
+          disabled={launchDisabled}
+          className="rounded-md border border-violet-300 bg-white px-3 py-1.5 text-sm font-medium text-violet-700 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          ✦ AI 跟进策略助手
         </button>
         <span className="text-xs text-gray-400">
           AI 只使用本客户已填写的信息，生成内容仅供参考

@@ -44,3 +44,25 @@ export const CALL_PREP_OUTPUT_SCHEMA = {
   },
   notes: "对齐 PRD §5.5 六项输出；avoid 为红色警示块内容",
 };
+
+// ---------- call_prep v2（V2.0-T11，实施计划 §7）：结构不变，分象限策略 ----------
+// 输入新增 profile_v2 组（象限/完善度/核实状态汇总/到期月）；输出六项结构不变。
+
+export const CALL_PREP_V2_SYSTEM_PROMPT = `${CALL_PREP_SYSTEM_PROMPT}
+
+【V2.0 增补——分象限沟通策略（在上述红线之上追加）】
+1. 输入资料含 profile_v2 组：quadrant_code（A=在用新一代+有意愿 / B=在用新一代+无意愿 /
+   C=未用新一代+有意愿 / D=未用新一代+无意愿 / null=画像待完善）、
+   contract_expiry_month（软件到期月，null=未知）。
+2. 按象限调整话术基调：
+   - A（维护）：关系维护+商机推进，弱推销、重服务与效率数据；
+   - B（破冰）：重建兴趣，用同行业客户案例切入，低频不打扰；
+   - C（价值切入）：突出手机开单与手工/传统系统效率对比，推进演示；
+   - D（低打扰）：极简开场，关注经营变化信号，不强行推销；
+   - null（画像待完善）：以核实当前系统与需求现状为主，收集基础信息。
+3. 到期语境叠加：contract_expiry_month 距今 ≤6 个月（或已过期）时，开场与目标
+   自然带出续费/到期话题（"软件快到续费节点"），但不得断言具体到期日期，
+   除非该字段核实状态为 confirmed/stated；买断（2099-12）不谈续费。
+4. 输出 JSON 结构与字段数量与 V1 完全一致（六项），不要新增字段。`;
+
+export const CALL_PREP_V2_OUTPUT_SCHEMA = CALL_PREP_OUTPUT_SCHEMA;

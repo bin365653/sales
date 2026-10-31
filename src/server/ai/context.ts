@@ -1,10 +1,17 @@
 import { Interaction, Lead, LeadStage } from "@prisma/client";
+import { currentExpiryMonth, expiryWindow } from "@/lib/expiry";
 
 // Context Builder（T08，实施计划 §7.1 / PRD §6.1、§6.9）：
 // 从线索构建 AI 输入快照——白名单字段（画像 + 阶段 + 最近沟通摘要），
 // 不含联系人电话等联系方式（分析与话术不需要，落实"最小化敏感信息"）。
 // 快照整体落 ai_runs.input_snapshot（Run Logger 留痕 + 历史可复现），
-// 含核实状态列（unknown/unverified/confirmed），供模型区分事实/推断/未知。
+// 含核实状态列（unknown/unverified/stated/confirmed），供模型区分事实/推断/未知。
+//
+// V2.0-T11 扩展（实施计划 §7）：
+// - profile_v2 组：象限/完善度/到期月 + 全字段核实状态汇总
+//   （不含核实人与核实时间——展示身份信息不进入模型输入）；
+// - followup_context（仅 followup_advice）：pending 自动任务来源 + 策略快照，
+//   由 runner 注入（服务端生成，AI 解释必须与其一致，不允许编造策略）。
 
 /** 最近沟通条数（快照摘要窗口） */
 const RECENT_INTERACTIONS_LIMIT = 5;
@@ -51,14 +58,36 @@ function isoDateOrNull(value: Date | null): string | null {
   return value ? value.toISOString().slice(0, 10) : null;
 }
 
+/** 核实状态汇总行（不含核实人/时间） */
+export interface VerificationSummaryRow {
+  fieldKey: string;
+  status: string;
+}
+
+/** followup_advice 专用快照组（runner 注入；来源/策略快照由服务端生成） */
+export interface FollowupContextTask {
+  source_type: string;
+  title: string;
+  due_at: string;
+  priority: number | null;
+  policy: { name: string; quadrant_code: string | null; interval_days: number } | null;
+}
+
+export interface FollowupContext {
+  pending_tasks: FollowupContextTask[];
+  note: string;
+}
+
 /**
  * 构建 AI 输入快照（JSON，直接落库与拼入提示词）。
- * 白名单组：基本信息 / 系统情况（含核实状态）/ 采购情况（含核实状态）/ 管理组 / 最近沟通。
+ * 白名单组：基本信息 / 系统情况（含核实状态）/ 采购情况（含核实状态）/ 管理组 /
+ * 最近沟通 / profile_v2（V2.0-T11：象限+完善度+到期月+核实状态汇总）。
  * 明确排除：contact_phone（§7.1——电话与分析和话术无关）；密钥类信息天然不在线索表。
  */
 export function buildAiInput(
   lead: Lead & { stage: LeadStage },
   interactions: InteractionForSnapshot[],
+  extras: { verifications?: VerificationSummaryRow[] } = {},
 ): Record<string, unknown> {
   const recent = [...interactions]
     .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
@@ -79,6 +108,16 @@ export function buildAiInput(
       objections: item.objections,
       next_action: item.nextAction,
     }));
+
+  // V2.0-T11：核实状态汇总（白名单字段 → 四态；不含核实人/时间）
+  const verificationSummary: Record<string, string> = {};
+  for (const row of extras.verifications ?? []) {
+    verificationSummary[row.fieldKey] = row.status;
+  }
+  const now = new Date();
+  const expiryMonth = lead.contractExpiry
+    ? currentExpiryMonth(lead.contractExpiry)
+    : null;
 
   return {
     profile: {
@@ -122,10 +161,51 @@ export function buildAiInput(
       last_contact_at: lead.lastContactAt?.toISOString() ?? null,
       next_contact_at: lead.nextContactAt?.toISOString() ?? null,
     },
+    // V2.0-T11：画像经营组（象限/完善度/到期窗口/核实状态汇总）
+    profile_v2: {
+      quadrant_code: lead.quadrantCode ?? null,
+      profile_status: lead.profileStatus ?? null,
+      contract_expiry_month: expiryMonth,
+      contract_expiry_window:
+        lead.contractExpiry === null
+          ? "unknown"
+          : expiryWindow(lead.contractExpiry, now),
+      verification_summary: verificationSummary,
+    },
     recent_interactions: recent,
     snapshot_note:
       "仅含白名单字段；电话等联系方式未提供。" +
-      "核实状态取值：unknown(未知)/unverified(待核实)/confirmed(已确认)。" +
-      "对状态非 confirmed 的信息不得当作事实陈述。",
+      "核实状态取值：unknown(未知)/unverified(待核实)/stated(客户自述待复核)/confirmed(已确认)。" +
+      "对状态非 confirmed/stated 的信息不得当作事实陈述。",
+  };
+}
+
+/** followup_context 组（仅 followup_advice 快照携带；§7 任务来源+策略快照） */
+export function buildFollowupContext(
+  tasks: {
+    sourceType: string;
+    title: string;
+    dueAt: Date;
+    priority: number | null;
+    policy: { name: string; quadrantCode: string | null; intervalDays: number } | null;
+  }[],
+): FollowupContext {
+  return {
+    pending_tasks: tasks.map((task) => ({
+      source_type: task.sourceType,
+      title: task.title,
+      due_at: task.dueAt.toISOString(),
+      priority: task.priority,
+      policy: task.policy
+        ? {
+            name: task.policy.name,
+            quadrant_code: task.policy.quadrantCode,
+            interval_days: task.policy.intervalDays,
+          }
+        : null,
+    })),
+    note:
+      "以下任务由系统按确定规则生成（来源/策略为服务端快照）；" +
+      "reason_explanation 必须与之一致，不允许编造策略或来源。",
   };
 }

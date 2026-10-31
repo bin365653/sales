@@ -76,11 +76,12 @@ describe("aiRunCreateSchema", () => {
     ).toBe(true);
   });
 
-  it("三类 run 均有中文标签（UI 文案）", () => {
+  it("四类 run 均有中文标签（UI 文案；V2.0-T11 新增跟进策略助手）", () => {
     expect(Object.keys(RUN_TYPE_LABELS)).toEqual([
       "analysis",
       "call_prep",
       "interaction_summary",
+      "followup_advice",
     ]);
   });
 });
