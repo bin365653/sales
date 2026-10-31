@@ -7,6 +7,7 @@ import { listActiveUsers } from "@/server/services/users";
 import { getRunningExperimentGroups } from "@/server/services/experiments";
 import { leadListQuerySchema, type LeadListQuery } from "@/lib/schemas/lead";
 import { toShanghaiDateString, toShanghaiDateTimeString } from "@/lib/format";
+import { formatExpiryChip } from "@/lib/expiry";
 import { LeadFilters } from "@/components/leads/lead-filters";
 import { LeadsTable, type LeadRow } from "@/components/leads/leads-table";
 import { ExportButton } from "@/components/leads/export-button";
@@ -16,6 +17,8 @@ export const dynamic = "force-dynamic";
 // P3 线索池（T04）：搜索 + 组合筛选 + 分页 + 批量修改 + 新建入口。
 // 数据查询直接走服务层（与 GET /api/leads 同一实现，口径必然一致）；
 // 移动端保留可查看与搜索（次要列隐藏、表格横向滚动）。
+// V2.0-T03：经营筛选（象限/意愿/新一代/到期视图/到期年月/核心核实）+
+// 列扩展（象限徽章、到期年月）。
 
 interface SearchParams {
   [key: string]: string | string[] | undefined;
@@ -34,6 +37,12 @@ function buildPageHref(query: LeadListQuery, page: number): string {
     priority: query.priority,
     nextContact: query.nextContact,
     ownerId: query.ownerId,
+    quadrant: query.quadrant,
+    qinceInterest: query.qinceInterest,
+    nextGen: query.nextGen,
+    coreVerified: query.coreVerified,
+    expiryView: query.expiryView,
+    expiryMonth: query.expiryMonth,
   })) {
     if (value) {
       params.set(key, value);
@@ -75,6 +84,7 @@ export default async function LeadsPage({
     result.items.map((lead) => lead.id),
   );
 
+  const now = new Date();
   const rows: LeadRow[] = result.items.map((lead) => ({
     id: lead.id,
     name: lead.name,
@@ -88,6 +98,11 @@ export default async function LeadsPage({
       ? toShanghaiDateString(lead.lastContactAt)
       : null,
     updatedAt: toShanghaiDateTimeString(lead.updatedAt),
+    // V2.0-T03：象限徽章 + 到期年月（列表不做核实状态二次判定，null 值即未知）
+    quadrantCode: lead.quadrantCode,
+    expiryDisplay: lead.contractExpiry
+      ? formatExpiryChip(lead.contractExpiry, now)
+      : null,
   }));
 
   const totalPages =

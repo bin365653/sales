@@ -3,6 +3,7 @@ import {
   BUILTIN_LEAD_FIELD_KEYS,
   VERIFIABLE_FIELD_KEYS,
 } from "@/lib/lead-fields";
+import { normalizeExpiryInput } from "@/lib/expiry";
 
 // 线索相关入参 Schema（T03）：API 入参与前端表单共用同一份定义（实施计划 §2.1），
 // 字段校验前后端一致由"共用本文件"保证。
@@ -135,13 +136,22 @@ export function parseShanghaiDate(value: string): Date {
   return new Date(value);
 }
 
-const optionalDateString = (label: string) =>
-  z.preprocess(
-    emptyToNull,
-    dateStringSchema.refine((v) => v === undefined || isValidDay(v), {
-      message: `${label}不是有效的日历日期`,
-    }).nullable().optional(),
-  );
+/**
+ * V2.0（P4）：软件到期输入归一化——YYYY-MM → 当月 1 日、YYYY → 当年 12 月
+ * （UIUX §4.6），YYYY-MM-DD 沿用；精度展示层统一为年月。
+ */
+const optionalExpiryDateString = z.preprocess(
+  (value) => {
+    if (typeof value === "string") {
+      const normalized = value.trim() === "" ? null : normalizeExpiryInput(value);
+      return normalized;
+    }
+    return value;
+  },
+  dateStringSchema.refine((v) => v === undefined || isValidDay(v), {
+    message: "软件到期时间不是有效的年月（YYYY-MM）或日期",
+  }).nullable().optional(),
+);
 
 function isValidDay(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -193,7 +203,7 @@ export const leadCreateSchema = z.object({
   salesMode: optionalText(64, "销售模式"),
   currentSystem: optionalText(128, "当前使用系统"),
   systemModules: optionalText(255, "使用模块"),
-  contractExpiry: optionalDateString("软件到期时间"),
+  contractExpiry: optionalExpiryDateString,
   knownPains: optionalMultilineText("已知不满"),
   consideringSwitch: optionalBoolean(),
   hasClearDemand: optionalBoolean(),
@@ -290,6 +300,22 @@ export const leadListQuerySchema = z.object({
   nextContact: z.enum(["today"]).optional(),
   /** 仅管理员生效：按负责人筛选（销售强制限定本人，K1） */
   ownerId: uuidSchema.optional(),
+  // —— V2.0-T03 经营筛选（实施计划 §5 列表改造；未知≠否：no 只命中显式 false）——
+  /** 四象限：a/b/c/d 或 pending（画像待完善，quadrant_code=null） */
+  quadrant: z.enum(["a", "b", "c", "d", "pending"]).optional(),
+  /** 是否愿意沟通了解勤策（Y 轴） */
+  qinceInterest: z.enum(["yes", "no"]).optional(),
+  /** 是否新一代手机开单（X 轴） */
+  nextGen: z.enum(["yes", "no"]).optional(),
+  /** 到期视图：未来 6 个月 / 未来 1 个月 / 已过期 / 未知（月粒度，P4） */
+  expiryView: z.enum(["within_6m", "within_1m", "expired", "unknown"]).optional(),
+  /** 到期年月（YYYY-MM）：命中该月（当月 1 日~次月 1 日前） */
+  expiryMonth: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/, "到期年月格式应为 YYYY-MM")
+    .optional(),
+  /** 核心画像是否已核实（yes = profile_status ∈ basic/deep，即核心 7/7） */
+  coreVerified: z.enum(["yes", "no"]).optional(),
 });
 
 // ---------- 批量修改（PATCH /api/leads/batch，T04） ----------

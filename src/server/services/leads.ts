@@ -23,6 +23,11 @@ import {
 import { assertLeadReadable, assertLeadWritable, leadReadScope } from "@/server/permissions";
 import { validateCustomValues, FieldDefLike, FieldIssue } from "@/lib/lead-field-validation";
 import {
+  addExpiryMonths,
+  currentExpiryMonth,
+  expiryMonthToUtcDate,
+} from "@/lib/expiry";
+import {
   applyVerificationWrites,
   collectExplicitStatuses,
   computeVerificationWrites,
@@ -794,7 +799,75 @@ export function buildLeadListWhere(
           },
         }
       : {}),
+    // —— V2.0-T03 经营筛选（未知≠否：no 只命中显式 false）——
+    ...(query.quadrant === "pending"
+      ? { quadrantCode: null }
+      : query.quadrant
+        ? { quadrantCode: query.quadrant }
+        : {}),
+    ...(query.qinceInterest
+      ? { qinceInterest: query.qinceInterest === "yes" }
+      : {}),
+    ...(query.nextGen ? { nextGenMobileOrder: query.nextGen === "yes" } : {}),
+    ...buildExpiryFilters(query, options.now ?? new Date()),
+    ...(query.coreVerified === "yes"
+      ? { profileStatus: { in: ["basic", "deep"] as const } }
+      : query.coreVerified === "no"
+        ? { OR: [{ profileStatus: "incomplete" as const }, { profileStatus: null }] }
+        : {}),
   };
+}
+
+/**
+ * 到期筛选（月粒度，P4 / §4.2）：
+ * - expired：E < 当月；within_6m：当月 ≤ E ≤ 当月+6；within_1m：当月 ≤ E ≤ 当月+1；
+ * - unknown：到期为 null，或核实行状态 = unknown（值为 null 或未核实均视未知）；
+ * - expiryMonth：命中指定月（[当月 1 日, 次月 1 日)）。
+ * @db.Date 纯日期列按 UTC 日期比较（与 contract_expiry 存储口径一致）。
+ */
+function buildExpiryFilters(
+  query: LeadListQuery,
+  now: Date,
+): Prisma.LeadWhereInput {
+  const currentMonth = currentExpiryMonth(now);
+  if (query.expiryMonth) {
+    const start = expiryMonthToUtcDate(query.expiryMonth);
+    const end = expiryMonthToUtcDate(addExpiryMonths(query.expiryMonth, 1));
+    return { contractExpiry: { gte: start, lt: end } };
+  }
+  switch (query.expiryView) {
+    case "expired":
+      return {
+        contractExpiry: { lt: expiryMonthToUtcDate(currentMonth) },
+      };
+    case "within_6m":
+      return {
+        contractExpiry: {
+          gte: expiryMonthToUtcDate(currentMonth),
+          lte: expiryMonthToUtcDate(addExpiryMonths(currentMonth, 6)),
+        },
+      };
+    case "within_1m":
+      return {
+        contractExpiry: {
+          gte: expiryMonthToUtcDate(currentMonth),
+          lte: expiryMonthToUtcDate(addExpiryMonths(currentMonth, 1)),
+        },
+      };
+    case "unknown":
+      return {
+        OR: [
+          { contractExpiry: null },
+          {
+            fieldVerifications: {
+              some: { fieldKey: "contract_expiry", status: "unknown" },
+            },
+          },
+        ],
+      };
+    default:
+      return {};
+  }
 }
 
 export async function listLeads(

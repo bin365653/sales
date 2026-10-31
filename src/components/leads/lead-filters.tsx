@@ -27,7 +27,13 @@ export function LeadFilters({ query, stages, owners }: LeadFiltersProps) {
     Boolean(query.stageId) ||
     Boolean(query.priority) ||
     Boolean(query.nextContact) ||
-    Boolean(query.ownerId);
+    Boolean(query.ownerId) ||
+    Boolean(query.quadrant) ||
+    Boolean(query.qinceInterest) ||
+    Boolean(query.nextGen) ||
+    Boolean(query.coreVerified) ||
+    Boolean(query.expiryView) ||
+    Boolean(query.expiryMonth);
 
   return (
     <form
@@ -136,6 +142,99 @@ export function LeadFilters({ query, stages, owners }: LeadFiltersProps) {
           </select>
         </div>
       )}
+      {/* —— V2.0-T03 经营分类筛选（迭代文档：四象限/待完善/意愿/新一代/到期/核实）—— */}
+      <div className="flex flex-col gap-1">
+        <label htmlFor="q-quadrant" className="text-xs text-gray-500">
+          四象限
+        </label>
+        <select
+          id="q-quadrant"
+          name="quadrant"
+          defaultValue={query.quadrant ?? ""}
+          className={INPUT_CLASS}
+        >
+          <option value="">全部象限</option>
+          <option value="a">A·第一象限</option>
+          <option value="b">B·第二象限</option>
+          <option value="c">C·第三象限</option>
+          <option value="d">D·第四象限</option>
+          <option value="pending">画像待完善</option>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="q-interest" className="text-xs text-gray-500">
+          沟通意愿
+        </label>
+        <select
+          id="q-interest"
+          name="qinceInterest"
+          defaultValue={query.qinceInterest ?? ""}
+          className={INPUT_CLASS}
+        >
+          <option value="">不限</option>
+          <option value="yes">有意愿</option>
+          <option value="no">无意愿</option>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="q-nextgen" className="text-xs text-gray-500">
+          新一代手机开单
+        </label>
+        <select
+          id="q-nextgen"
+          name="nextGen"
+          defaultValue={query.nextGen ?? ""}
+          className={INPUT_CLASS}
+        >
+          <option value="">不限</option>
+          <option value="yes">是</option>
+          <option value="no">否</option>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="q-core-verified" className="text-xs text-gray-500">
+          核心画像
+        </label>
+        <select
+          id="q-core-verified"
+          name="coreVerified"
+          defaultValue={query.coreVerified ?? ""}
+          className={INPUT_CLASS}
+        >
+          <option value="">不限</option>
+          <option value="yes">已全部核实</option>
+          <option value="no">未全部核实</option>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="q-expiry-view" className="text-xs text-gray-500">
+          到期视图
+        </label>
+        <select
+          id="q-expiry-view"
+          name="expiryView"
+          defaultValue={query.expiryView ?? ""}
+          className={INPUT_CLASS}
+        >
+          <option value="">全部</option>
+          <option value="within_6m">未来 6 个月到期</option>
+          <option value="within_1m">未来 1 个月到期</option>
+          <option value="expired">已过期</option>
+          <option value="unknown">到期未知</option>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="q-expiry-month" className="text-xs text-gray-500">
+          到期年月
+        </label>
+        <input
+          id="q-expiry-month"
+          name="expiryMonth"
+          type="month"
+          defaultValue={query.expiryMonth ?? ""}
+          className={INPUT_CLASS}
+        />
+      </div>
       <div className="col-span-2 flex items-end gap-2 md:col-span-1">
         <button
           type="submit"

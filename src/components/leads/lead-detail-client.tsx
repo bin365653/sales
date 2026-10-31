@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import {
   FACT_STATUS_BADGE_CLASS,
+  FACT_STATUS_HINTS,
   FACT_STATUS_LABELS,
   PRIORITY_BADGE_CLASS,
   PRIORITY_LABELS,
@@ -45,12 +46,22 @@ export interface LeadHeaderView {
   updatedAt: string;
 }
 
+export interface VerifyMeta {
+  /** 来源文案：人工录入 / 导入 / 沟通确认 / 系统初始化 */
+  source: string;
+  person: string | null;
+  time: string | null;
+}
+
 export interface DisplayGroup {
   title: string;
   fields: {
     label: string;
     text: string;
+    /** V2.0 四态核实状态（verification-first） */
     factStatus?: string;
+    /** 核实五元组（来源/核实人/核实时间），hover ⓘ 展示 */
+    verifyMeta?: VerifyMeta;
   }[];
 }
 
@@ -67,6 +78,29 @@ export interface TimelineItem {
   detailText: string | null;
   actorName: string | null;
   occurredAt: string;
+}
+
+/** 画像核实历史条目（updated 事件的字段级变更明细，V2.0-T03） */
+export interface VerifyHistoryItem {
+  id: string;
+  occurredAt: string;
+  actorName: string | null;
+  source: string | null;
+  fields: {
+    label: string;
+    from: string;
+    to: string;
+    statusText: string | null;
+  }[];
+}
+
+/** 画像缺失项（核心字段未核实；V2.0-T03 快捷更新入口） */
+export interface MissingFieldItem {
+  defKey: string;
+  label: string;
+  statusText: string;
+  /** 确定性核实话术模板（V2.4 起 AI 增强） */
+  script: string;
 }
 
 export interface LeadDetailClientProps {
@@ -89,6 +123,12 @@ export interface LeadDetailClientProps {
   formValues: Record<string, string | number | boolean | null>;
   /** V2.0-T02：字典启用字段（defKey）→ 启用值（编辑表单 DictSelect 渲染） */
   dictOptions?: Record<string, { value: string; isNextGen: boolean }[]>;
+  /** V2.0-T03：核心画像已核实数（confirmed/stated）/ 7 */
+  coreVerifiedCount?: number;
+  /** V2.0-T03：画像核实历史（字段级变更，最新在前） */
+  verifyHistory?: VerifyHistoryItem[];
+  /** V2.0-T03：核心画像缺失项 + 快捷更新入口 */
+  missingCoreFields?: MissingFieldItem[];
   /** AI 面板初始数据（T09）：runs/用量/启用提示词版本，轮询后由面板自行刷新 */
   aiRuns: AiRunView[];
   aiUsage: AiQuotaView;
@@ -106,6 +146,21 @@ function factBadgeClass(status: string): string {
   );
 }
 
+/** 四态徽章 hover：状态含义 + 五元组（来源/核实人/核实时间） */
+function factBadgeTitle(field: {
+  factStatus?: string;
+  verifyMeta?: VerifyMeta;
+}): string {
+  const statusLine = `核实状态：${FACT_STATUS_LABELS[field.factStatus as FactStatus] ?? field.factStatus}`;
+  const hint =
+    FACT_STATUS_HINTS[field.factStatus as FactStatus] ?? "";
+  const meta = field.verifyMeta;
+  const metaLine = meta
+    ? `来源：${meta.source}${meta.person ? ` · 核实人：${meta.person}` : ""}${meta.time ? ` · ${meta.time}` : ""}`
+    : null;
+  return metaLine ? `${statusLine}（${hint}）\n${metaLine}` : `${statusLine}（${hint}）`;
+}
+
 export function LeadDetailClient({
   lead,
   groups,
@@ -119,6 +174,9 @@ export function LeadDetailClient({
   tasks,
   formValues,
   dictOptions,
+  coreVerifiedCount,
+  verifyHistory = [],
+  missingCoreFields = [],
   aiRuns,
   aiUsage,
   activePromptVersions,
@@ -320,6 +378,38 @@ export function LeadDetailClient({
         </div>
       ) : (
         <>
+          {/* V2.0-T03：核心画像进度（轻量提示，不强制必填——引导而非拦截） */}
+          {typeof coreVerifiedCount === "number" && (
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-medium text-gray-900">
+                  核心画像 {coreVerifiedCount}/7 已核实
+                </span>
+                {missingCoreFields.length > 0 && (
+                  <span className="text-xs text-gray-500">
+                    待核实：{missingCoreFields.map((item) => item.label).join("、")}
+                  </span>
+                )}
+              </div>
+              <div
+                className="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={7}
+                aria-valuenow={coreVerifiedCount}
+                aria-label="核心画像已核实进度"
+              >
+                <div
+                  className="h-full rounded-full bg-blue-500 transition-all"
+                  style={{ width: `${(coreVerifiedCount / 7) * 100}%` }}
+                />
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-gray-400">
+                已核实 = 已确认 或 客户自述待复核；未知与待核实不会被当作「否」。
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {groups.map((group) => (
               <section
@@ -340,7 +430,7 @@ export function LeadDetailClient({
                         {field.text}
                         {field.factStatus && (
                           <span
-                            title={`核实状态：${FACT_STATUS_LABELS[field.factStatus as FactStatus] ?? field.factStatus}`}
+                            title={factBadgeTitle(field)}
                             className={`rounded px-1.5 py-0.5 text-xs ${
                               factBadgeClass(field.factStatus)
                             }`}
@@ -387,6 +477,98 @@ export function LeadDetailClient({
               </section>
             )}
           </div>
+
+          {/* V2.0-T03：画像缺失项（核心未核实字段）+ 快捷更新入口 */}
+          {missingCoreFields.length > 0 && (
+            <section className="rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+              <h2 className="mb-1 text-sm font-semibold text-amber-700">
+                画像缺失项（{missingCoreFields.length}）
+              </h2>
+              <p className="mb-3 text-xs leading-relaxed text-amber-600">
+                以下核心字段尚未核实；未知与待核实不会被当作「否」。核实话术供电话沟通参考。
+              </p>
+              <ul className="flex flex-col gap-2">
+                {missingCoreFields.map((item) => (
+                  <li
+                    key={item.defKey}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-3 py-2 text-sm"
+                  >
+                    <span>
+                      <span className="font-medium text-gray-800">{item.label}</span>
+                      <span className="ml-2 text-xs text-gray-400">
+                        当前：{item.statusText}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="hidden max-w-xs truncate text-xs text-gray-400 sm:inline">
+                        {item.script}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(item.script);
+                          } catch {
+                            // 剪贴板不可用（非安全上下文）时静默忽略
+                          }
+                        }}
+                        className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 transition hover:bg-gray-50"
+                      >
+                        复制话术
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditing(true)}
+                        className="rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white transition hover:bg-blue-700"
+                      >
+                        去核实
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {/* V2.0-T03：画像核实历史（字段值与核实状态变更，只读留痕） */}
+          <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <h2 className="mb-1 text-sm font-semibold text-gray-900">
+              画像核实历史（{verifyHistory.length} 条）
+            </h2>
+            <p className="mb-3 text-xs leading-relaxed text-gray-400">
+              字段值与核实状态的每次变更都保留历史，不会被覆盖；联系方式只显示「已变更」。
+            </p>
+            <ol className="flex flex-col gap-3">
+              {verifyHistory.map((item) => (
+                <li key={item.id} className="rounded-md bg-gray-50 px-3 py-2">
+                  <p className="text-xs text-gray-400">
+                    {item.occurredAt}
+                    {item.actorName ? ` · ${item.actorName}` : ""}
+                    {item.source ? ` · 来源：${item.source}` : ""}
+                  </p>
+                  <ul className="mt-1 flex flex-col gap-1">
+                    {item.fields.map((field) => (
+                      <li key={field.label} className="text-sm text-gray-800">
+                        <span className="font-medium">{field.label}</span>
+                        ：
+                        <span className="text-gray-500">{field.from}</span>
+                        <span className="mx-1">→</span>
+                        <span>{field.to}</span>
+                        {field.statusText && (
+                          <span className="ml-2 text-xs text-gray-400">
+                            （{field.statusText}）
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+              {verifyHistory.length === 0 && (
+                <li className="text-sm text-gray-400">该客户暂无画像变更记录</li>
+              )}
+            </ol>
+          </section>
 
           <section className="rounded-lg border border-gray-200 bg-white p-4">
             <h2 className="mb-4 text-sm font-semibold text-gray-900">
@@ -435,6 +617,7 @@ export function LeadDetailClient({
             currentStageSortOrder={currentStageSortOrder}
             stages={stageOptions}
             interactions={interactions}
+            dictOptions={dictOptions?.current_system}
             aiPending={aiRunInFlight}
             onAiPendingChange={setAiRunInFlight}
             aiDisabled={isControlGroup}

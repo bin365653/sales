@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeExpiryInput } from "@/lib/expiry";
 
 // 沟通记录入参 Schema（T06）：API 入参与前端表单共用（实施计划 §2.1）。
 // 字段全集 = PRD §5.6；direction 为看板"呼出数"口径来源（K5/C08）。
@@ -103,6 +104,37 @@ const nextContactAtSchema = z.preprocess(
     .optional(),
 );
 
+/** V2.0（P4）：到期年月输入 YYYY-MM（含 2099-12 买断）或 YYYY（归一为当年 12 月） */
+const expiryMonthConfirmedSchema = z.preprocess(
+  (value) => (typeof value === "string" ? normalizeExpiryInput(value) : value),
+  z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "软件到期年月格式应为 YYYY-MM")
+    .nullable()
+    .optional(),
+);
+
+/** 可空布尔（是/否下拉；空 = 未确认） */
+const optionalYesNo = () =>
+  z.preprocess(
+    (value) => {
+      if (value === "" || value === null) {
+        return null;
+      }
+      if (value === "true") {
+        return true;
+      }
+      if (value === "false") {
+        return false;
+      }
+      return value;
+    },
+    z
+      .boolean({ message: "仅支持填写 是 / 否" })
+      .nullable()
+      .optional(),
+  );
+
 const baseInteractionFields = z.object({
   occurredAt: occurredAtSchema,
   channel: z.enum(INTERACTION_CHANNELS, {
@@ -125,6 +157,16 @@ const baseInteractionFields = z.object({
   demoBooked: z.boolean().optional(),
   confirmCurrentSystem: z.boolean().optional(),
   confirmPurchaseTime: z.boolean().optional(),
+  // —— V2.0-T03「本次确认」扩展（UIUX §4.7；确认即同事务写值+置 confirmed）——
+  /** 是否新一代手机开单（X 轴）：勾选时必填值 */
+  confirmNextGen: z.boolean().optional(),
+  nextGenConfirmed: optionalYesNo(),
+  /** 是否愿意沟通了解勤策（Y 轴）：勾选时必填值 */
+  confirmQinceInterest: z.boolean().optional(),
+  qinceInterestConfirmed: optionalYesNo(),
+  /** 软件到期年月：勾选时必填值（YYYY-MM；2099-12 = 买断） */
+  confirmExpiry: z.boolean().optional(),
+  expiryMonthConfirmed: expiryMonthConfirmedSchema,
 });
 
 // effective 依赖 connected 的交叉校验（zod v4：refine 必须放在 omit 之后叠加，
@@ -142,19 +184,56 @@ const aiRunIdSchema = z
   )
   .optional();
 
-export const interactionCreateSchema = baseInteractionFields
-  .extend({ aiRunId: aiRunIdSchema })
+// 修正（M11）：同一套字段校验；不含"本次确认"标记（一次性动作，不在修正中重复触发）。
+export const interactionUpdateSchema = baseInteractionFields
+  .omit({
+    confirmCurrentSystem: true,
+    confirmPurchaseTime: true,
+    confirmNextGen: true,
+    nextGenConfirmed: true,
+    confirmQinceInterest: true,
+    qinceInterestConfirmed: true,
+    confirmExpiry: true,
+    expiryMonthConfirmed: true,
+  })
   .refine(effectiveRequiresConnected, {
     message: "未接通的沟通不能标记为有效沟通",
     path: ["effective"],
   });
 
-// 修正（M11）：同一套字段校验；不含"本次确认"标记（一次性动作，不在修正中重复触发）。
-export const interactionUpdateSchema = baseInteractionFields
-  .omit({ confirmCurrentSystem: true, confirmPurchaseTime: true })
+// 交叉校验（create）：新一代/意愿/到期年月勾选确认时必须提供值
+// （空值确认会让分类轴永远停在未知，直接拒绝并提示）。
+export const interactionCreateSchema = baseInteractionFields
+  .extend({ aiRunId: aiRunIdSchema })
   .refine(effectiveRequiresConnected, {
     message: "未接通的沟通不能标记为有效沟通",
     path: ["effective"],
+  })
+  .superRefine((value, ctx) => {
+    if (value.confirmNextGen && (value.nextGenConfirmed ?? null) === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["nextGenConfirmed"],
+        message: "勾选确认「是否新一代」时请先选择 是 / 否",
+      });
+    }
+    if (
+      value.confirmQinceInterest &&
+      (value.qinceInterestConfirmed ?? null) === null
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["qinceInterestConfirmed"],
+        message: "勾选确认「沟通意愿」时请先选择 是 / 否",
+      });
+    }
+    if (value.confirmExpiry && !value.expiryMonthConfirmed) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["expiryMonthConfirmed"],
+        message: "勾选确认「软件到期年月」时请先选择年月（买断选 2099-12）",
+      });
+    }
   });
 
 export type InteractionCreateInput = z.infer<typeof interactionCreateSchema>;

@@ -164,7 +164,7 @@ describe("导入全流程（固定样例文件）", () => {
       { key: "contact_phone", label: "联系方式", message: "联系方式仅支持数字及 + - ( ) 空格" },
     ]);
     expect(byRowNo.get(4)!.errors).toEqual([
-      { key: "contract_expiry", label: "软件到期时间", message: "软件到期时间不是有效的日历日期" },
+      { key: "contract_expiry", label: "软件到期时间", message: "软件到期时间不是有效的年月（YYYY-MM）或日期" },
     ]);
     expect(byRowNo.get(5)!.errors).toEqual([
       { key: "name", label: "客户名称", message: "请输入客户名称" },

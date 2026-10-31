@@ -92,6 +92,8 @@ export interface InteractionFormProps {
   stages: InteractionStageOption[];
   currentStageName: string;
   currentStageSortOrder: number;
+  /** V2.0-T02：current_system 字典选项（启用时当前系统渲染为下拉+新一代建议） */
+  dictOptions?: { value: string; isNextGen: boolean }[];
   onSaved: () => void;
   onCancel: () => void;
   /** 详情页 AI 面板等其他入口存在 pending run 时禁用摘要发起（§4.7 互斥） */
@@ -111,6 +113,7 @@ export function InteractionForm({
   stages,
   currentStageName,
   currentStageSortOrder,
+  dictOptions,
   onSaved,
   onCancel,
   aiPending = false,
@@ -123,6 +126,12 @@ export function InteractionForm({
   const [demoBooked, setDemoBooked] = useState(initial.demoBooked);
   const [confirmCurrentSystem, setConfirmCurrentSystem] = useState(false);
   const [confirmPurchaseTime, setConfirmPurchaseTime] = useState(false);
+  // V2.0-T03「本次确认」扩展（UIUX §4.7）：到期年月 / 新一代 / 意愿
+  const [confirmExpiry, setConfirmExpiry] = useState(false);
+  const [confirmNextGen, setConfirmNextGen] = useState(false);
+  const [confirmQinceInterest, setConfirmQinceInterest] = useState(false);
+  /** 字典建议带入的新一代预填值（软件字典 → 人工确认，决策 D1） */
+  const [nextGenPrefill, setNextGenPrefill] = useState("");
   const [withTask, setWithTask] = useState(false);
   const [taskType, setTaskType] = useState<(typeof TASK_TYPES)[number]>("follow_up");
   const [submitting, setSubmitting] = useState(false);
@@ -348,6 +357,13 @@ export function InteractionForm({
         ? {
             confirmCurrentSystem,
             confirmPurchaseTime,
+            // V2.0-T03「本次确认」扩展：到期年月/新一代/意愿（勾选=写值+置已核实）
+            confirmExpiry,
+            expiryMonthConfirmed: text("expiryMonthConfirmed") || null,
+            confirmNextGen,
+            nextGenConfirmed: text("nextGenConfirmed") || null,
+            confirmQinceInterest,
+            qinceInterestConfirmed: text("qinceInterestConfirmed") || null,
             // AI 摘要草稿来源（T10）：服务层校验归属/类型/状态后登记到记录
             ...(aiDraft ? { aiRunId: aiDraft.runId } : {}),
             // "同时创建任务"（T07/UIUX P5）：截止时间缺省取下次联系时间（自动联动）
@@ -595,12 +611,39 @@ export function InteractionForm({
               客户当前系统
             </label>
             <div className="flex items-center gap-2">
-              <input
-                id="i-system"
-                name="currentSystemConfirmed"
-                defaultValue={initial.currentSystemConfirmed ?? ""}
-                className={INPUT_CLASS}
-              />
+              {dictOptions && dictOptions.length > 0 ? (
+                <select
+                  id="i-system"
+                  name="currentSystemConfirmed"
+                  defaultValue={initial.currentSystemConfirmed ?? ""}
+                  onChange={(event) => {
+                    // 决策 D1：命中新一代字典项 → 建议勾选「是否新一代」并预填「是」，
+                    // 用户可取消勾选或改选（不采纳不写入，未知不当是）
+                    const option = dictOptions.find(
+                      (item) => item.value === event.target.value,
+                    );
+                    if (option?.isNextGen && mode === "create") {
+                      setConfirmNextGen(true);
+                      setNextGenPrefill("true");
+                    }
+                  }}
+                  className={SELECT_CLASS}
+                >
+                  <option value="">（未选择）</option>
+                  {dictOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.value}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  id="i-system"
+                  name="currentSystemConfirmed"
+                  defaultValue={initial.currentSystemConfirmed ?? ""}
+                  className={INPUT_CLASS}
+                />
+              )}
               {mode === "create" && (
                 <label
                   title="勾选后，画像中「当前使用系统」的核实状态将更新为已确认"
@@ -676,6 +719,108 @@ export function InteractionForm({
           </div>
         </div>
       </section>
+
+      {/* V2.0-T03「本次确认」扩展（UIUX §4.7）：勾选 = 写入画像并标记
+          已核实·来源：沟通确认；分类轴确认后象限自动重算（T04） */}
+      {mode === "create" && (
+        <section className="rounded-md border border-blue-100 bg-blue-50/40 p-3">
+          <h4 className="mb-1 text-sm font-semibold text-gray-900">
+            本次确认（勾选 = 写入画像并标记「已核实 · 来源：沟通确认」）
+          </h4>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={confirmExpiry}
+                  onChange={(event) => setConfirmExpiry(event.target.checked)}
+                  className={CHECKBOX_CLASS}
+                />
+                软件到期年月
+              </label>
+              {confirmExpiry && (
+                <div className="flex items-center gap-2">
+                  <input
+                    aria-label="确认软件到期年月"
+                    name="expiryMonthConfirmed"
+                    type="month"
+                    className={INPUT_CLASS}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const input = formRef.current?.elements.namedItem(
+                        "expiryMonthConfirmed",
+                      ) as HTMLInputElement | null;
+                      if (input) {
+                        input.value = "2099-12";
+                      }
+                    }}
+                    title="买断客户的到期时间统一为 2099-12"
+                    className="h-8 shrink-0 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-600 transition hover:bg-gray-50"
+                  >
+                    买断（2099-12）
+                  </button>
+                </div>
+              )}
+              {fieldError("expiryMonthConfirmed")}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={confirmNextGen}
+                  onChange={(event) => setConfirmNextGen(event.target.checked)}
+                  className={CHECKBOX_CLASS}
+                />
+                是否新一代手机开单
+              </label>
+              {confirmNextGen && (
+                <select
+                  aria-label="确认是否新一代手机开单"
+                  name="nextGenConfirmed"
+                  key={`nextgen-${nextGenPrefill}`}
+                  defaultValue={nextGenPrefill}
+                  className={SELECT_CLASS}
+                >
+                  <option value="">请选择</option>
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
+              )}
+              {fieldError("nextGenConfirmed")}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={confirmQinceInterest}
+                  onChange={(event) => setConfirmQinceInterest(event.target.checked)}
+                  className={CHECKBOX_CLASS}
+                />
+                愿意沟通了解勤策
+              </label>
+              {confirmQinceInterest && (
+                <select
+                  aria-label="确认沟通意愿"
+                  name="qinceInterestConfirmed"
+                  defaultValue=""
+                  className={SELECT_CLASS}
+                >
+                  <option value="">请选择</option>
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
+              )}
+              {fieldError("qinceInterestConfirmed")}
+            </div>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-gray-500">
+            确认即更新客户画像并留痕（来源/核实人/时间）；AI
+            不会代替你修改画像或分类。
+          </p>
+        </section>
+      )}
 
       <section>
         <h4 className="mb-2 text-sm font-semibold text-gray-900">结论与下一步</h4>

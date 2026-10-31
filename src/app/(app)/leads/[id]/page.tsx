@@ -17,7 +17,6 @@ import type { RunTypeValue } from "@/lib/schemas/ai";
 import {
   toDateTimeInputValue,
   toShanghaiDateTimeString,
-  toUtcDateString,
 } from "@/lib/format";
 import {
   FACT_STATUS_FIELDS,
@@ -28,6 +27,14 @@ import {
   LEAD_FIELD_GROUP_LABELS,
   type FieldDefRow,
 } from "@/lib/lead-form-fields";
+import {
+  LEGACY_STATUS_COLUMN_BY_FIELD,
+  PROFILE_CORE_FIELDS,
+  VERIFIABLE_FIELD_KEYS,
+} from "@/lib/lead-fields";
+import { formatExpiryChip } from "@/lib/expiry";
+import { FACT_STATUS_LABELS } from "@/lib/format";
+import type { VerifyMeta } from "@/components/leads/lead-detail-client";
 import type { FieldOption } from "@/lib/lead-field-validation";
 import {
   InteractionAuditEntry,
@@ -75,11 +82,25 @@ function asDetail(raw: unknown): {
   fields?: unknown[];
   batch?: boolean;
   reason?: string;
+  source?: string;
+  changed?: Record<
+    string,
+    { from?: unknown; to?: unknown; statusFrom?: string; statusTo?: string }
+  >;
 } | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
   }
-  return raw as { fields?: unknown[]; batch?: boolean; reason?: string };
+  return raw as {
+    fields?: unknown[];
+    batch?: boolean;
+    reason?: string;
+    source?: string;
+    changed?: Record<
+      string,
+      { from?: unknown; to?: unknown; statusFrom?: string; statusTo?: string }
+    >;
+  };
 }
 
 function optionsOf(def: FieldDefRow): FieldOption[] {
@@ -109,9 +130,16 @@ export default async function LeadDetailPage({
   let detail: {
     lead: Lead & { stage: { id: string; name: string; sortOrder: number } };
     events: EventRow[];
+    verifications: {
+      fieldKey: string;
+      status: string;
+      source: string;
+      verifiedBy: string | null;
+      verifiedAt: Date | null;
+    }[];
   };
   try {
-    detail = (await getLeadDetail(user, id)) as typeof detail;
+    detail = (await getLeadDetail(user, id)) as unknown as typeof detail;
   } catch {
     notFound();
   }
@@ -120,9 +148,15 @@ export default async function LeadDetailPage({
     listFieldDefs({ activeOnly: false }),
     listStages({ activeOnly: true }),
     getUserNames(
-      detail.events
-        .map((event) => event.actorId)
-        .filter((actorId): actorId is string => actorId !== null),
+      [
+        ...detail.events
+          .map((event) => event.actorId)
+          .filter((actorId): actorId is string => actorId !== null),
+        // 核实历史/五元组展示：核实人姓名（V2.0-T01/T03）
+        ...detail.verifications
+          .map((row) => row.verifiedBy)
+          .filter((id): id is string => id !== null),
+      ],
     ),
     listInteractions(user, id),
     listLeadTasks(user, id),
@@ -220,6 +254,51 @@ export default async function LeadDetailPage({
   const customFields = buildCustomFormFields(fieldDefs);
   const labelMap = buildFieldLabelMap(fieldDefs);
 
+  // ---------- V2.0 核实状态（verification-first，V2.0-T01/T03） ----------
+
+  const verificationByField = new Map(
+    detail.verifications.map((row) => [row.fieldKey, row]),
+  );
+
+  /** 核实行优先；V1.0 四个旧状态列兜底；缺省 unknown */
+  function statusOf(fieldKey: string): string {
+    const row = verificationByField.get(fieldKey);
+    if (row) {
+      return row.status;
+    }
+    const legacyColumn = LEGACY_STATUS_COLUMN_BY_FIELD[fieldKey];
+    if (legacyColumn) {
+      const value = (lead as unknown as Record<string, string>)[legacyColumn];
+      if (value) {
+        return value;
+      }
+    }
+    return "unknown";
+  }
+
+  const VERIFICATION_SOURCE_LABELS: Record<string, string> = {
+    manual: "人工录入",
+    import: "导入",
+    interaction: "沟通确认",
+    initial: "系统初始化",
+  };
+
+  /** 五元组（来源/核实人/核实时间）：未知且无动作痕迹时不展示 */
+  function verifyMetaOf(fieldKey: string): VerifyMeta | undefined {
+    if (!VERIFIABLE_FIELD_KEYS.has(fieldKey)) {
+      return undefined;
+    }
+    const row = verificationByField.get(fieldKey);
+    if (!row || (row.status === "unknown" && row.source === "initial")) {
+      return undefined;
+    }
+    return {
+      source: VERIFICATION_SOURCE_LABELS[row.source] ?? row.source,
+      person: row.verifiedBy ? (actorNames.get(row.verifiedBy) ?? null) : null,
+      time: row.verifiedAt ? toShanghaiDateTimeString(row.verifiedAt) : null,
+    };
+  }
+
   // ---------- 展示值 ----------
 
   function displayOf(key: string): string {
@@ -237,26 +316,29 @@ export default async function LeadDetailPage({
     label: string;
     text: string;
     factStatus?: string;
+    verifyMeta?: VerifyMeta;
   }
+  // V2.0（P4）：软件到期一律显示年月（ExpiryChip 语义文案，买断 2099-12）
+  const expiryDisplay = lead.contractExpiry
+    ? formatExpiryChip(lead.contractExpiry, now, {
+        status: statusOf("contract_expiry"),
+      })
+    : null;
   const groups = FORM_GROUP_ORDER.map((group) => {
     const fields: DisplayField[] = builtinFields
       .filter((field) => field.group === group)
       .map((field) => {
-        const fact = FACT_STATUS_FIELDS.find(
-          (item) => item.valueKey === field.key,
-        );
+        const verifiable = VERIFIABLE_FIELD_KEYS.has(field.defKey);
         return {
           label: field.label,
           text:
-            field.key === "contractExpiry" && lead.contractExpiry
-              ? toUtcDateString(lead.contractExpiry)
+            field.key === "contractExpiry" && expiryDisplay
+              ? expiryDisplay
               : displayOf(field.key),
-          ...(fact
+          ...(verifiable
             ? {
-                factStatus: (
-                  (lead as unknown as Record<string, string>)[fact.statusKey] ??
-                  "unknown"
-                ),
+                factStatus: statusOf(field.defKey),
+                verifyMeta: verifyMetaOf(field.defKey),
               }
             : {}),
         };
@@ -313,7 +395,12 @@ export default async function LeadDetailPage({
           title = "导入创建";
           break;
         case "updated": {
-          title = detailInfo?.batch ? "批量修改资料" : "修改资料";
+          title =
+            detailInfo?.source === "interaction"
+              ? "沟通确认更新画像"
+              : detailInfo?.batch
+                ? "批量修改资料"
+                : "修改资料";
           const fields = (detailInfo?.fields ?? [])
             .map((field) => labelMap.get(String(field)) ?? String(field))
             .filter(Boolean);
@@ -348,6 +435,76 @@ export default async function LeadDetailPage({
     })
     .reverse(); // 最新在前
 
+  // ---------- V2.0-T03：画像核实历史 / 缺失项 / 核心进度 ----------
+
+  function changeValueText(value: unknown): string {
+    if (value === null || value === undefined) {
+      return "（空）";
+    }
+    if (typeof value === "boolean") {
+      return value ? "是" : "否";
+    }
+    return String(value);
+  }
+
+  const verifyHistory = detail.events
+    .filter((event) => event.eventType === "updated")
+    .map((event) => {
+      const info = asDetail(event.detail);
+      if (!info?.changed || Object.keys(info.changed).length === 0) {
+        return null;
+      }
+      return {
+        id: event.id,
+        occurredAt: toShanghaiDateTimeString(event.occurredAt),
+        actorName: event.actorId ? (actorNames.get(event.actorId) ?? null) : null,
+        source: info.source
+          ? (VERIFICATION_SOURCE_LABELS[info.source] ?? info.source)
+          : null,
+        fields: Object.entries(info.changed).map(([key, change]) => ({
+          label:
+            key.startsWith("custom:")
+              ? (labelMap.get(key) ?? key.slice("custom:".length))
+              : (labelMap.get(key) ?? key),
+          from: changeValueText(change.from),
+          to: changeValueText(change.to),
+          statusText:
+            change.statusFrom &&
+            change.statusTo &&
+            change.statusFrom !== change.statusTo
+              ? `${FACT_STATUS_LABELS[change.statusFrom as keyof typeof FACT_STATUS_LABELS] ?? change.statusFrom} → ${FACT_STATUS_LABELS[change.statusTo as keyof typeof FACT_STATUS_LABELS] ?? change.statusTo}`
+              : null,
+        })),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .reverse(); // 最新在前
+
+  /** 核心缺失项的确定性核实话术模板（V2.4 起 AI 增强） */
+  const CORE_VERIFY_SCRIPTS: Record<string, string> = {
+    current_system: "请问您现在用的是哪套开单/进销存软件？用得怎么样？",
+    next_gen_mobile_order: "咱们现在开单是在手机上操作，还是电脑/纸质为主？",
+    qince_interest: "如果有一套能提升开单效率的手机系统，您愿意花几分钟了解一下吗？",
+    contract_expiry: "您现在的系统大概什么时候到期？续费价格还满意吗？",
+    industry: "咱们主要做哪个行业？",
+    main_category: "主营是哪一类商品？",
+    sales_team_scale: "咱们业务员团队大概有多少人？",
+  };
+
+  const isConfirmedStatus = (status: string) =>
+    status === "confirmed" || status === "stated";
+  const coreVerifiedCount = PROFILE_CORE_FIELDS.filter((key) =>
+    isConfirmedStatus(statusOf(key)),
+  ).length;
+  const missingCoreFields = PROFILE_CORE_FIELDS.filter(
+    (key) => !isConfirmedStatus(statusOf(key)),
+  ).map((key) => ({
+    defKey: key,
+    label: labelMap.get(key) ?? key,
+    statusText: FACT_STATUS_LABELS[statusOf(key) as keyof typeof FACT_STATUS_LABELS] ?? statusOf(key),
+    script: CORE_VERIFY_SCRIPTS[key] ?? `请核实「${labelMap.get(key) ?? key}」`,
+  }));
+
   // ---------- 表单初值（原始字符串，空 = 空输入） ----------
 
   const formValues: Record<string, string | number | boolean | null> = {};
@@ -359,8 +516,8 @@ export default async function LeadDetailPage({
         : null;
   }
   for (const fact of FACT_STATUS_FIELDS) {
-    formValues[fact.statusKey] =
-      (lead as unknown as Record<string, string>)[fact.statusKey] ?? "unknown";
+    // V2.0（T01）：表单状态下拉初值 = 核实行状态（verification-first）
+    formValues[fact.statusKey] = statusOf(fact.defKey);
   }
   formValues.priority = lead.priority;
   formValues.nextContactAt = lead.nextContactAt
@@ -407,6 +564,9 @@ export default async function LeadDetailPage({
       tasks={taskViews}
       formValues={formValues}
       dictOptions={Object.fromEntries(dictMap)}
+      coreVerifiedCount={coreVerifiedCount}
+      verifyHistory={verifyHistory}
+      missingCoreFields={missingCoreFields}
       aiRuns={aiRuns}
       aiUsage={aiUsage}
       activePromptVersions={activePromptVersions}

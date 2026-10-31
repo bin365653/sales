@@ -5,11 +5,14 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PRIORITY_BADGE_CLASS, PRIORITY_LABELS, type LeadPriority } from "@/lib/format";
 import type { ExperimentGroupValue } from "@/lib/experiments";
+import type { LeadQuadrantCode } from "@/lib/quadrant";
 import { GroupBadge } from "@/components/leads/group-badge";
+import { QuadrantBadge } from "@/components/leads/quadrant-badge";
 
 // 线索池表格 + 批量修改（P3，T04）。
 // 批量修改走 PATCH /api/leads/batch：白名单字段（优先级/阶段/来源/下次联系），
 // 其余字段在 Schema 层被拒绝（不静默忽略）；勾选仅限当前页。
+// V2.0-T03：新增象限徽章列与到期年月列（ExpiryChip 语义文案）。
 
 const SELECT_CLASS =
   "h-9 rounded-md border border-gray-300 bg-white px-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
@@ -25,6 +28,10 @@ export interface LeadRow {
   contactPhone: string | null;
   lastContactAt: string | null;
   updatedAt: string;
+  /** V2.0-T03：象限（null=画像待完善） */
+  quadrantCode: LeadQuadrantCode | null;
+  /** V2.0-T03：到期年月 ExpiryChip 文案（null=未知） */
+  expiryDisplay: string | null;
 }
 
 export interface LeadsTableProps {
@@ -214,12 +221,13 @@ export function LeadsTable({ rows, stages, experimentGroups }: LeadsTableProps) 
                 />
               </th>
               <th className="px-3 py-2.5 font-medium">客户名称</th>
+              <th className="px-3 py-2.5 font-medium">象限</th>
+              <th className="hidden px-3 py-2.5 font-medium md:table-cell">到期年月</th>
               <th className="px-3 py-2.5 font-medium">城市</th>
               <th className="hidden px-3 py-2.5 font-medium md:table-cell">行业</th>
               <th className="px-3 py-2.5 font-medium">阶段</th>
               <th className="px-3 py-2.5 font-medium">优先级</th>
               <th className="hidden px-3 py-2.5 font-medium lg:table-cell">联系人</th>
-              <th className="hidden px-3 py-2.5 font-medium lg:table-cell">联系方式</th>
               <th className="hidden px-3 py-2.5 font-medium lg:table-cell">最近联系</th>
               <th className="hidden px-3 py-2.5 font-medium md:table-cell">更新时间</th>
             </tr>
@@ -254,6 +262,12 @@ export function LeadsTable({ rows, stages, experimentGroups }: LeadsTableProps) 
                     </span>
                   )}
                 </td>
+                <td className="px-3 py-2.5">
+                  <QuadrantBadge code={row.quadrantCode} />
+                </td>
+                <td className="hidden px-3 py-2.5 text-gray-600 md:table-cell">
+                  {row.expiryDisplay ?? "—"}
+                </td>
                 <td className="px-3 py-2.5 text-gray-600">{row.city ?? "—"}</td>
                 <td className="hidden px-3 py-2.5 text-gray-600 md:table-cell">
                   {row.industry ?? "—"}
@@ -276,9 +290,6 @@ export function LeadsTable({ rows, stages, experimentGroups }: LeadsTableProps) 
                   {row.contactName ?? "—"}
                 </td>
                 <td className="hidden px-3 py-2.5 text-gray-600 lg:table-cell">
-                  {row.contactPhone ?? "—"}
-                </td>
-                <td className="hidden px-3 py-2.5 text-gray-600 lg:table-cell">
                   {row.lastContactAt ?? "—"}
                 </td>
                 <td className="hidden px-3 py-2.5 text-xs text-gray-400 md:table-cell">
@@ -288,7 +299,7 @@ export function LeadsTable({ rows, stages, experimentGroups }: LeadsTableProps) 
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-3 py-10 text-center text-gray-400">
+                <td colSpan={11} className="px-3 py-10 text-center text-gray-400">
                   没有符合条件的客户
                 </td>
               </tr>

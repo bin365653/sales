@@ -16,6 +16,7 @@ import { buildStageSnapshot } from "@/server/services/stages";
 import { applyVerificationWrites } from "@/server/services/lead-verifications";
 import type { VerificationWrite } from "@/server/services/lead-verifications";
 import { LEGACY_STATUS_COLUMN_BY_FIELD } from "@/lib/lead-fields";
+import { normalizeExpiryInput } from "@/lib/expiry";
 
 // 沟通写入事务核心（T06 抽出）：保存沟通记录（POST /api/leads/:id/interactions）
 // 与完成任务弹窗（T07 POST /api/tasks/:id/complete-with-interaction）共用同一套
@@ -218,34 +219,108 @@ export async function applyInteractionWrite(
 
   const advance = await resolveStageAdvance(tx, lead, flags);
 
-  // V2.0（T01）：「本次确认」经核实元数据写入（source=interaction，置 confirmed），
-  // 旧状态列同事务镜像（V1.0 读取点不漂移）。值写入与新增确认字段随 V2-T03 扩展。
+  // V2.0（T01/T03）：「本次确认」经核实元数据写入（source=interaction，置 confirmed），
+  // 旧状态列同事务镜像（V1.0 读取点不漂移）；
+  // T03 扩展：确认即写值（当前系统/新一代/意愿/到期年月），值写入同事务，
+  // 并写 updated 事件留痕（from/to/statusFrom/statusTo）。
   const now = new Date();
+  const existingVerifications = await tx.leadFieldVerification.findMany({
+    where: { leadId: lead.id },
+  });
+  const statusFromOf = (fieldKey: string): string =>
+    existingVerifications.find((row) => row.fieldKey === fieldKey)?.status ??
+    (LEGACY_STATUS_COLUMN_BY_FIELD[fieldKey]
+      ? String(
+          (lead as unknown as Record<string, unknown>)[
+            LEGACY_STATUS_COLUMN_BY_FIELD[fieldKey]!
+          ] ?? "unknown",
+        )
+      : "unknown");
+
   const confirmWrites: VerificationWrite[] = [];
-  if (input.confirmCurrentSystem) {
+  /** 确认动作带来的线索值写入（驼峰列名） */
+  const valueUpdates: Prisma.LeadUncheckedUpdateInput = {};
+  /** updated 事件 changed 明细 */
+  const changedDetail: Record<
+    string,
+    { from: unknown; to: unknown; statusFrom: string; statusTo: string }
+  > = {};
+  const text = (value: unknown) =>
+    value === null || value === undefined || value === "" ? null : String(value);
+  const bool = (value: unknown) =>
+    typeof value === "boolean" ? value : null;
+  const date = (value: unknown) =>
+    value instanceof Date ? value.toISOString().slice(0, 10) : null;
+  /** 登记一次确认动作：核实行 + 旧列镜像 + 事件明细 */
+  const buildConfirm = (
+    fieldKey: string,
+    valueBefore: unknown,
+    valueAfter: unknown,
+    serialize: (value: unknown) => unknown,
+  ): void => {
     confirmWrites.push({
-      fieldKey: "current_system",
+      fieldKey,
       status: "confirmed",
       source: "interaction",
       verifiedBy: actorId,
       verifiedAt: now,
     });
+    const legacyColumn = LEGACY_STATUS_COLUMN_BY_FIELD[fieldKey];
+    if (legacyColumn) {
+      (valueUpdates as Record<string, unknown>)[legacyColumn] = "confirmed";
+    }
+    changedDetail[fieldKey] = {
+      from: serialize(valueBefore),
+      to: serialize(valueAfter),
+      statusFrom: statusFromOf(fieldKey),
+      statusTo: "confirmed",
+    };
+  };
+
+  if (input.confirmCurrentSystem) {
+    // 确认即写值（V2.0 §5 沟通表单）；值为空 = 仅确认既有值（V1.0 兼容）
+    const nextValue = input.currentSystemConfirmed ?? null;
+    if (nextValue) {
+      valueUpdates.currentSystem = nextValue;
+    }
+    buildConfirm(
+      "current_system",
+      lead.currentSystem,
+      nextValue ?? lead.currentSystem,
+      text,
+    );
   }
   if (input.confirmPurchaseTime) {
-    confirmWrites.push({
-      fieldKey: "purchase_time",
-      status: "confirmed",
-      source: "interaction",
-      verifiedBy: actorId,
-      verifiedAt: now,
-    });
+    buildConfirm("purchase_time", lead.purchaseTime, lead.purchaseTime, text);
   }
-  const confirmMirrors: Record<string, "confirmed"> = {};
-  for (const write of confirmWrites) {
-    const legacyColumn = LEGACY_STATUS_COLUMN_BY_FIELD[write.fieldKey];
-    if (legacyColumn) {
-      confirmMirrors[legacyColumn] = "confirmed";
-    }
+  if (input.confirmNextGen) {
+    const nextValue = input.nextGenConfirmed ?? null;
+    valueUpdates.nextGenMobileOrder = nextValue;
+    buildConfirm(
+      "next_gen_mobile_order",
+      lead.nextGenMobileOrder,
+      nextValue,
+      bool,
+    );
+  }
+  if (input.confirmQinceInterest) {
+    const nextValue = input.qinceInterestConfirmed ?? null;
+    valueUpdates.qinceInterest = nextValue;
+    buildConfirm(
+      "qince_interest",
+      lead.qinceInterest,
+      nextValue,
+      bool,
+    );
+  }
+  if (input.confirmExpiry) {
+    // 到期输入（Schema 已归一为 YYYY-MM-DD；兜底再走一次归一化兼容 YYYY-MM）
+    // → 当月 1 日（@db.Date，P4 月粒度）；2099-12 = 买断
+    const monthValue = input.expiryMonthConfirmed ?? null;
+    const dayValue = monthValue ? normalizeExpiryInput(monthValue) : null;
+    const nextValue = dayValue ? new Date(`${dayValue}T00:00:00.000Z`) : null;
+    valueUpdates.contractExpiry = nextValue;
+    buildConfirm("contract_expiry", lead.contractExpiry, nextValue, date);
   }
 
   await bumpLeadForInteraction(tx, lead.id, advance ? lead.stageId : null, {
@@ -256,13 +331,28 @@ export async function applyInteractionWrite(
         : lead.lastContactAt,
     // 未填写下次联系时间时不改动线索既有计划
     ...(input.nextContactAt ? { nextContactAt } : {}),
-    ...confirmMirrors,
+    ...valueUpdates,
     ...(advance ? { stageId: advance.toStage.id } : {}),
   });
 
   if (confirmWrites.length > 0) {
     await applyVerificationWrites(tx, lead.id, confirmWrites);
+    // 确认动作留痕：updated 事件（detail.changed 含值与核实状态变化）
+    await tx.leadEvent.create({
+      data: {
+        leadId: lead.id,
+        actorId,
+        eventType: "updated",
+        detail: {
+          fields: Object.keys(changedDetail),
+          changed: changedDetail,
+          source: "interaction",
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
   }
+  // V2-T04：确认动作若触及分类轴字段（next_gen_mobile_order/qince_interest），
+  // 此处将触发象限重算（quadrant_changed 事件 + profile_status 维护）。
 
   if (advance) {
     await writeAdvanceEvent(tx, lead.id, actorId, advance, created.id);

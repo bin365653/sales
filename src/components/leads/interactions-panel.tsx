@@ -58,6 +58,8 @@ export interface InteractionsPanelProps {
   currentStageSortOrder: number;
   stages: InteractionStageOption[];
   interactions: InteractionView[];
+  /** V2.0-T02：current_system 字典选项（沟通表单下拉+新一代建议带入） */
+  dictOptions?: { value: string; isNextGen: boolean }[];
   /** 详情页 AI 面板存在 pending run 时禁用表单摘要发起（§4.7 互斥，T10） */
   aiPending?: boolean;
   /** 表单摘要 run 生命周期通知（与 AI 面板互斥） */
@@ -101,6 +103,7 @@ export function InteractionsPanel({
   currentStageSortOrder,
   stages,
   interactions,
+  dictOptions,
   aiPending = false,
   onAiPendingChange,
   aiDisabled = false,
@@ -170,6 +173,7 @@ export function InteractionsPanel({
             stages={stages}
             currentStageName={currentStageName}
             currentStageSortOrder={currentStageSortOrder}
+            dictOptions={dictOptions}
             aiPending={aiPending}
             onAiPendingChange={onAiPendingChange}
             aiDisabled={aiDisabled}
