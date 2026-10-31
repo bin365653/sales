@@ -440,6 +440,28 @@ export default async function LeadDetailPage({
               : null;
           break;
         }
+        // V2.0-T06（UIUX §5.1-8/§6.4）：跟进计划重算留痕——原因必显
+        case "plan_changed": {
+          title = "跟进计划已重算";
+          const info = asDetail(event.detail) as {
+            reason?: string;
+            canceledTaskIds?: string[];
+            createdCycleKeys?: string[];
+          } | null;
+          const REASON_LABELS: Record<string, string> = {
+            expiry_updated: "软件到期时间更新",
+            system_updated: "当前使用系统更新",
+            nextgen_updated: "是否新一代更新",
+            interest_updated: "沟通意愿更新",
+            stage_changed: "销售阶段变化",
+            policy_updated: "跟进策略调整",
+            interaction_confirmed: "沟通确认触发",
+          };
+          const canceled = info?.canceledTaskIds?.length ?? 0;
+          const created = info?.createdCycleKeys?.length ?? 0;
+          detailText = `原因：${REASON_LABELS[info?.reason ?? ""] ?? "画像变化"}；取消未来计划 ${canceled} 条，新建 ${created} 条（历史任务不变）`;
+          break;
+        }
         default:
           title = event.eventType;
       }

@@ -674,7 +674,9 @@ export function LeadDetailClient({
                           ? "bg-blue-500"
                           : item.eventType === "quadrant_changed"
                             ? "bg-amber-500"
-                            : "bg-gray-300"
+                            : item.eventType === "plan_changed"
+                              ? "bg-teal-500"
+                              : "bg-gray-300"
                       }`}
                     />
                     {index < timeline.length - 1 && (
