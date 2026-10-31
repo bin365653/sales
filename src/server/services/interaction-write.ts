@@ -16,6 +16,7 @@ import { buildStageSnapshot } from "@/server/services/stages";
 import { applyVerificationWrites } from "@/server/services/lead-verifications";
 import type { VerificationWrite } from "@/server/services/lead-verifications";
 import { recomputeLeadClassification } from "@/server/services/profile";
+import { recalcFollowUpPlan } from "@/server/services/task-generation";
 import { LEGACY_STATUS_COLUMN_BY_FIELD } from "@/lib/lead-fields";
 import { normalizeExpiryInput } from "@/lib/expiry";
 
@@ -353,6 +354,25 @@ export async function applyInteractionWrite(
     });
     // V2.0-T04：确认动作触发象限/完善度重算（quadrant_changed 事件在重算内写）
     await recomputeLeadClassification(tx, lead.id, actorId);
+    // V2.0-T06：确认写了重算触发字段（当前系统/新一代/意愿/到期年月）或
+    // 发生阶段推进 → 重算跟进计划（§4.6；reason 取本次最高优先触发）
+    const confirmTriggerReasons: [string, string][] = [
+      ["contract_expiry", "expiry_updated"],
+      ["current_system", "system_updated"],
+      ["next_gen_mobile_order", "nextgen_updated"],
+      ["qince_interest", "interest_updated"],
+    ];
+    const confirmReason = confirmTriggerReasons.find(([fieldKey]) =>
+      confirmWrites.some((write) => write.fieldKey === fieldKey),
+    );
+    if (advance || confirmReason) {
+      await recalcFollowUpPlan(
+        lead.id,
+        advance ? "stage_changed" : confirmReason![1],
+        actorId,
+        { tx },
+      );
+    }
   }
 
   if (advance) {

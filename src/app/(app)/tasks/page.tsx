@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { listStages } from "@/server/services/stages";
 import { listTasks } from "@/server/services/tasks";
+import { runTaskGenerationLazy } from "@/server/services/task-generation";
 import { taskListQuerySchema, TASK_LIST_VIEWS, VIEW_LABELS } from "@/lib/schemas/task";
 import { TASK_STATUSES, TASK_STATUS_LABELS } from "@/lib/tasks";
 import { toTaskView } from "@/components/tasks/task-view";
@@ -46,7 +47,12 @@ export default async function TasksPage({
   const query = parsed.success ? parsed.data : taskListQuerySchema.parse({});
 
   const [result, stages] = await Promise.all([
-    listTasks(user, query),
+    (async () => {
+      // V2.0-T06：页面加载即完成当日生成（惰性触发，与 GET /api/tasks 同口径；
+      // 失败只记审计不阻塞页面）
+      await runTaskGenerationLazy(user);
+      return listTasks(user, query);
+    })(),
     listStages({ activeOnly: true }),
   ]);
 

@@ -36,6 +36,7 @@ const createdLeadIds: string[] = [];
 async function createFixtureLead(
   ownerId: string,
   quadrant: "a" | "b" | "c" | "d" | null,
+  options: { contractExpiry?: string } = {},
 ): Promise<string> {
   const stage = await getPresetStage("to_contact");
   const lead = await prisma.lead.create({
@@ -44,10 +45,24 @@ async function createFixtureLead(
       ownerId,
       stageId: stage.id,
       quadrantCode: quadrant,
+      ...(options.contractExpiry
+        ? { contractExpiry: new Date(`${options.contractExpiry}T00:00:00.000Z`) }
+        : {}),
     },
     select: { id: true },
   });
   createdLeadIds.push(lead.id);
+  if (options.contractExpiry) {
+    // 与应用写入链路一致：到期值有核实行（unverified=值存在未复核，窗口按值算）
+    await prisma.leadFieldVerification.create({
+      data: {
+        leadId: lead.id,
+        fieldKey: "contract_expiry",
+        status: "unverified",
+        source: "manual",
+      },
+    });
+  }
   return lead.id;
 }
 
@@ -374,11 +389,16 @@ describe("跟进策略：保存后命中客户重算（取消侧）", () => {
     expect(wonEvents).toBe(0);
   });
 
-  it("停用策略同样取消命中客户的 pending 周期任务；到期月度任务不受象限策略保存影响", async () => {
+  it("改周期重算保留当月月度任务（§4.6：仍适用则保留）；象限周期任务被取消", async () => {
     const policies = await listFollowUpPolicies();
     const d = policies.find((p) => p.quadrantCode === "d")!;
     const system = policies.find((p) => p.isSystem)!;
-    const lead = await createFixtureLead(admin.value!.id, "d");
+    // 夹具：D 象限 + 下月到期（within_6m，含核实行）——月度与周期任务并存
+    const now = new Date();
+    const nextMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 2).padStart(2, "0")}`;
+    const lead = await createFixtureLead(admin.value!.id, "d", {
+      contractExpiry: `${nextMonth}-01`,
+    });
     const periodic = await createAutoTaskFixture({
       leadId: lead,
       policyId: d.id,
@@ -389,7 +409,7 @@ describe("跟进策略：保存后命中客户重算（取消侧）", () => {
       leadId: lead,
       policyId: system.id,
       sourceType: "expiry_monthly",
-      cycleKey: "M2026-11",
+      cycleKey: "M2099-12",
     });
 
     await updateFollowUpPolicies(admin.value!, {
@@ -404,10 +424,11 @@ describe("跟进策略：保存后命中客户重算（取消侧）", () => {
       ],
     });
 
+    // 象限周期任务被重算取消
     expect((await prisma.task.findUniqueOrThrow({ where: { id: periodic.task.id } })).status).toBe(
       "canceled",
     );
-    // 月度任务是系统强制规则，不随象限策略停用被取消
+    // 当月月度任务仍适用 → 保留（§4.6），系统强制规则不受象限策略停用影响
     expect((await prisma.task.findUniqueOrThrow({ where: { id: monthly.task.id } })).status).toBe(
       "pending",
     );

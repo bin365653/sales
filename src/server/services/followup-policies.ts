@@ -1,4 +1,4 @@
-import { FollowUpPolicy, Prisma } from "@prisma/client";
+import { FollowUpPolicy } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { ApiError } from "@/server/http/api";
 import { AuthUser } from "@/lib/auth";
@@ -8,7 +8,7 @@ import {
   FollowupPoliciesUpdateInput,
   FollowupPolicyUpdateItem,
 } from "@/lib/schemas/settings";
-import { cancelPendingAutoPlans } from "@/server/services/followup-plan";
+import { recalcFollowUpPlan } from "@/server/services/task-generation";
 
 // 跟进策略服务（V2.0-T05，实施计划 §3.2 / 决策 D2 / 口径 P6）。
 //
@@ -153,8 +153,9 @@ export async function updateFollowUpPolicies(
       });
     }
 
-    // 命中客户批量重算（取消侧）：未终态 + 未删除 + 命中象限 →
-    // 取消 pending 象限周期任务并作废其周期行；逐客户写 plan_changed 事件
+    // 命中客户批量重算（§4.6）：未终态 + 未删除 + 命中象限 →
+    // recalcFollowUpPlan 取消未来计划并按新周期立即重建（当月到期月度任务
+    // 仍适用则保留）；plan_changed 事件在 recalc 内写（reason=policy_updated）
     const leads = await tx.lead.findMany({
       where: {
         deletedAt: null,
@@ -164,22 +165,10 @@ export async function updateFollowUpPolicies(
       select: { id: true },
     });
     for (const lead of leads) {
-      const { canceledTaskIds } = await cancelPendingAutoPlans(tx, lead.id, [
-        "quadrant_periodic",
-      ]);
-      if (canceledTaskIds.length > 0) {
-        await tx.leadEvent.create({
-          data: {
-            leadId: lead.id,
-            actorId: actor.id,
-            eventType: "plan_changed",
-            detail: {
-              reason: "policy_updated",
-              canceledTaskIds,
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
-      }
+      await recalcFollowUpPlan(lead.id, "policy_updated", actor.id, {
+        tx,
+        now: new Date(),
+      });
     }
     return { affectedLeads: leads.length, auditPayloads: payloads };
   });

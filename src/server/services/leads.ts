@@ -36,6 +36,7 @@ import {
 } from "@/server/services/lead-verifications";
 import { getEnabledDictValueMap } from "@/server/services/dicts";
 import { recomputeLeadClassification } from "@/server/services/profile";
+import { recalcFollowUpPlan } from "@/server/services/task-generation";
 
 // 线索服务（T03）：新建/编辑/详情/软删除/阶段流转/列表。
 // 关键不变量：
@@ -660,6 +661,19 @@ export async function updateLead(
         },
       });
     }
+    // V2.0-T06：重算触发字段（§4.6）变化 → 重算跟进计划（同事务，重算读到的
+    // 是本轮写入后的最新值）。阶段变化走 transitionStage（专用触发）；
+    // 值或核实状态变化都在 computed.changed 中（status-only 也计入）。
+    const planTriggerReasons: [string, string][] = [
+      ["contract_expiry", "expiry_updated"],
+      ["current_system", "system_updated"],
+      ["next_gen_mobile_order", "nextgen_updated"],
+      ["qince_interest", "interest_updated"],
+    ];
+    const planReason = planTriggerReasons.find(([field]) => field in computed.changed);
+    if (planReason) {
+      await recalcFollowUpPlan(id, planReason[1], actor.id, { tx });
+    }
   });
 
   return prisma.lead.findUniqueOrThrow({
@@ -716,6 +730,9 @@ export async function transitionStage(
         } as unknown as Prisma.InputJsonValue,
       },
     });
+    // V2.0-T06：销售阶段是重算触发字段（§4.6）——流转到 won/closed 时取消
+    // 全部 pending 自动任务；其他流转按新阶段/象限口径重建未来计划
+    await recalcFollowUpPlan(id, "stage_changed", actor.id, { tx });
   });
 
   return {
