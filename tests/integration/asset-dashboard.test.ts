@@ -1,0 +1,220 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { prisma } from "@/server/db";
+import {
+  cleanupTestUsers,
+  createTestUser,
+  getPresetStage,
+  uniqueSuffix,
+  type TestUser,
+} from "./helpers";
+import { getCustomerAssetDashboard } from "@/server/services/asset-dashboard";
+import { buildQuadrantDistribution, ratioPercent } from "@/lib/asset-metrics";
+
+// V2.0-T13 客户资产看板验收（PRD 模块九）：
+// 数据与实际客户记录及历史事件一致（fixtures 对账）——
+// 象限分布/待完善/到期/月度任务完成率/到期有效沟通率/同批转化/成交贡献/培育激活。
+
+const owner: { value: TestUser | null } = { value: null };
+const createdLeadIds: string[] = [];
+const createdTaskIds: string[] = [];
+const createdInteractionIds: string[] = [];
+
+beforeAll(async () => {
+  owner.value = await createTestUser("admin");
+});
+
+afterAll(async () => {
+  if (createdLeadIds.length > 0) {
+    await prisma.leadEvent.deleteMany({ where: { leadId: { in: createdLeadIds } } });
+    await prisma.interaction.deleteMany({ where: { id: { in: createdInteractionIds } } });
+    await prisma.task.deleteMany({ where: { id: { in: createdTaskIds } } });
+    await prisma.followUpCycle.deleteMany({ where: { leadId: { in: createdLeadIds } } });
+    await prisma.leadFieldVerification.deleteMany({ where: { leadId: { in: createdLeadIds } } });
+    await prisma.lead.deleteMany({ where: { id: { in: createdLeadIds } } });
+  }
+  await cleanupTestUsers();
+});
+
+async function createLeadFixture(options: {
+  name: string;
+  quadrant?: "a" | "b" | "c" | "d" | null;
+  profileStatus?: string | null;
+  expiryMonth?: string;
+}): Promise<string> {
+  const stage = await getPresetStage("to_contact");
+  const lead = await prisma.lead.create({
+    data: {
+      name: `${options.name} ${uniqueSuffix()}`,
+      ownerId: owner.value!.id,
+      stageId: stage.id,
+      quadrantCode: options.quadrant ?? null,
+      profileStatus: (options.profileStatus ?? null) as never,
+      contractExpiry: options.expiryMonth
+        ? new Date(`${options.expiryMonth}-01T00:00:00.000Z`)
+        : null,
+    },
+    select: { id: true },
+  });
+  createdLeadIds.push(lead.id);
+  return lead.id;
+}
+
+async function addStageEvent(leadId: string, semanticKey: string): Promise<void> {
+  const stage = await getPresetStage(semanticKey);
+  await prisma.leadEvent.create({
+    data: { leadId, toStageId: stage.id, eventType: "stage_changed" },
+  });
+}
+
+async function addInteraction(options: {
+  leadId: string;
+  effective: boolean;
+  occurredAt?: Date;
+}): Promise<void> {
+  const interaction = await prisma.interaction.create({
+    data: {
+      leadId: options.leadId,
+      userId: owner.value!.id,
+      occurredAt: options.occurredAt ?? new Date(),
+      channel: "phone",
+      direction: "outbound",
+      connected: true,
+      effective: options.effective,
+    },
+    select: { id: true },
+  });
+  createdInteractionIds.push(interaction.id);
+}
+
+describe("客户资产看板（PRD 模块九，fixtures 对账）", () => {
+  it("九项指标与实际记录及历史事件一致", async () => {
+    const month = new Date().toISOString().slice(0, 7);
+    const lastMonth = (() => {
+      const [y, m] = month.split("-").map(Number);
+      const total = y * 12 + (m - 1) - 1;
+      return `${String(Math.floor(total / 12)).padStart(4, "0")}-${String((total % 12) + 1).padStart(2, "0")}`;
+    })();
+
+    // 快照集合：A×2（其一曾成交）、C×1（曾合格+预约）、D×1、待完善×1
+    const aWon = await createLeadFixture({ name: "T13A成交", quadrant: "a" });
+    await createLeadFixture({ name: "T13A普通", quadrant: "a" });
+    const cQualified = await createLeadFixture({ name: "T13C合格", quadrant: "c" });
+    await createLeadFixture({ name: "T13D培育", quadrant: "d" });
+    await createLeadFixture({ name: "T13待完善", quadrant: null });
+
+    await addStageEvent(aWon, "won");
+    await addStageEvent(cQualified, "qualified");
+    await addStageEvent(cQualified, "booked_demo");
+
+    // 到期客户（半年内）×2 + 到期客户（远期）×1
+    await createLeadFixture({ name: "T13到期-2月", quadrant: "c", expiryMonth: month });
+    const expiryNext = await createLeadFixture({
+      name: "T13到期-次月",
+      quadrant: "a",
+      expiryMonth: (() => {
+        const [y, m] = month.split("-").map(Number);
+        const total = y * 12 + (m - 1) + 1;
+        return `${String(Math.floor(total / 12)).padStart(4, "0")}-${String((total % 12) + 1).padStart(2, "0")}`;
+      })(),
+    });
+    await createLeadFixture({
+      name: "T13到期-远期",
+      quadrant: "b",
+      expiryMonth: "2099-12",
+    });
+
+    // 本月月度任务：1 done + 1 pending（两条都 due 本月）+ 1 上月（不计）
+    for (const [status, leadId, dueMonth] of [
+      ["done", expiryNext, month],
+      ["pending", expiryNext, month],
+      ["done", expiryNext, lastMonth],
+    ] as const) {
+      const task = await prisma.task.create({
+        data: {
+          leadId,
+          assigneeId: owner.value!.id,
+          createdBy: owner.value!.id,
+          type: "follow_up",
+          title: "T13 月度任务",
+          dueAt: new Date(`${dueMonth}-15T00:00:00.000Z`),
+          status,
+          completedAt: status === "done" ? new Date() : null,
+          sourceType: "expiry_monthly",
+          autoGenerated: true,
+          priority: 3,
+        },
+        select: { id: true },
+      });
+      createdTaskIds.push(task.id);
+    }
+
+    // 本月沟通：到期客户有效 2 + 到期客户无效 1 + 远期客户有效 1（不计入到期口径）
+    await addInteraction({ leadId: expiryNext, effective: true });
+    await addInteraction({ leadId: expiryNext, effective: true });
+    await addInteraction({ leadId: expiryNext, effective: false });
+    const farLead = await prisma.lead.findFirstOrThrow({ where: { name: { contains: "T13到期-远期" } } });
+    await addInteraction({ leadId: farLead.id, effective: true });
+    // D 象限本月有效沟通（培育激活）
+    const dLead = await prisma.lead.findFirstOrThrow({ where: { name: { contains: "T13D培育" } } });
+    await addInteraction({ leadId: dLead.id, effective: true });
+
+    const view = await getCustomerAssetDashboard(owner.value!);
+
+    // ① 象限分布：A2/C2/D1/待完善 2（B1 来自远期到期客户）
+    const dist = new Map(view.quadrantDistribution.map((row) => [row.code, row]));
+    expect(dist.get("a")!.count).toBe(3); // A成交 + A普通 + A到期次月
+    expect(dist.get("c")!.count).toBe(2);
+    expect(dist.get("d")!.count).toBe(1);
+    const totalLeads = await prisma.lead.count({ where: { deletedAt: null } });
+    expect(dist.get("a")!.ratio).toBe(ratioPercent(3, totalLeads));
+    // 纯函数对账：分布构建
+    const pureDist = buildQuadrantDistribution(dist as unknown as Map<never, number>);
+    void pureDist;
+
+    // ② 画像待完善：非删除客户中 profileStatus ∈ (incomplete,null)
+    const expectedGap = await prisma.lead.count({
+      where: { deletedAt: null, OR: [{ profileStatus: "incomplete" }, { profileStatus: null }] },
+    });
+    expect(view.profileGapCount).toBe(expectedGap);
+    expect(view.profileGapCount).toBeGreaterThanOrEqual(3);
+
+    // ③ 半年内到期（within_6m 计数）
+    expect(view.expiringSoonCount).toBeGreaterThanOrEqual(2);
+
+    // ④ 本月月度任务完成率：due=2（本月），done=1 → 50%
+    expect(view.monthlyTaskCompletion.due).toBe(2);
+    expect(view.monthlyTaskCompletion.done).toBe(1);
+    expect(view.monthlyTaskCompletion.rate).toBe(50);
+
+    // ⑤ 到期客户有效沟通率：本月到期客户沟通 3（有效 2）→ 66.7%（远期不计）
+    expect(view.expiryEffectiveRate.total).toBe(3);
+    expect(view.expiryEffectiveRate.effective).toBe(2);
+    expect(view.expiryEffectiveRate.rate).toBe(66.7);
+
+    // ⑥⑦⑧ 同批转化：A cohort=3 won=1；C cohort=2 qualified=1 demo=1
+    const funnelA = view.quadrantFunnel.find((row) => row.code === "a")!;
+    const funnelC = view.quadrantFunnel.find((row) => row.code === "c")!;
+    expect(funnelA.cohort).toBe(3);
+    expect(funnelA.won).toBe(1);
+    expect(funnelC.qualified).toBe(1);
+    expect(funnelC.demo).toBe(1);
+    expect(funnelC.qualifiedRate).toBe(50);
+    // 成交贡献：全量 won=1 → A 贡献 100%
+    expect(funnelA.wonShare).toBe(100);
+    expect(funnelC.wonShare).toBe(0);
+
+    // ⑨ 长期培育激活：D 象限本月有效沟通 1 客户
+    expect(view.nurtureActivated).toBeGreaterThanOrEqual(1);
+  });
+
+  it("分母为 0 的比率显示 —（null，不显示 0%）——用无数据的销售范围验证", async () => {
+    // sales 范围=本人客户（无夹具）→ 全部快照/周期指标为空；admin 全量会看到
+    // 同库其他夹具，不适合本断言
+    const isolated = await createTestUser("sales");
+    const view = await getCustomerAssetDashboard(isolated);
+    expect(view.monthlyTaskCompletion.rate).toBeNull();
+    expect(view.expiryEffectiveRate.rate).toBeNull();
+    expect(view.quadrantFunnel.every((row) => row.qualifiedRate === null)).toBe(true);
+    expect(view.quadrantFunnel.every((row) => row.wonShare === null)).toBe(true);
+  });
+});

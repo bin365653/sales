@@ -7,11 +7,13 @@ import { AnalyticsFilters } from "@/components/analytics/analytics-filters";
 import { FunnelSection } from "@/components/analytics/funnel";
 import { StageDistributionSection } from "@/components/analytics/stage-bars";
 import { ExperimentComparisonTable } from "@/components/analytics/comparison-table";
+import { AssetDashboardSection } from "@/components/analytics/asset-dashboard";
 import {
   EffectivePerHourValue,
   MetricDash,
 } from "@/components/analytics/metric-dash";
 import { EXPERIMENT_COMPARISON_METRICS } from "@/lib/experiments";
+import { getCustomerAssetDashboard } from "@/server/services/asset-dashboard";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +52,8 @@ export default async function AnalyticsPage({
     : analyticsQuerySchema.parse({});
 
   const view = await getAnalyticsDashboard(user, query);
+  // V2.0-T13：客户资产看板（快照型 + 本月周期型；与漏斗周期筛选解耦）
+  const assetView = await getCustomerAssetDashboard(user);
   const { rates, filters, options } = view;
   const funnelEmpty = isFunnelEmpty(view.counts);
 
@@ -86,6 +90,9 @@ export default async function AnalyticsPage({
       )}
 
       <FunnelSection rows={view.funnelRows} rates={rates} />
+
+      {/* V2.0-T13：客户资产看板（PRD 模块九，UIUX §5.8 漏斗区下方） */}
+      <AssetDashboardSection view={assetView} />
 
       {/* 效率与 AI（UIUX P7 ▍效率与 AI） */}
       <section className="rounded-lg border border-gray-200 bg-white p-4">
