@@ -81,17 +81,6 @@ export interface OperationsWorkbench {
   tabs: Record<WorkbenchTabKey, WorkbenchRow[]>;
 }
 
-function expiryStatusOf(
-  verifications: { leadId: string; fieldKey: string; status: string }[],
-  leadId: string,
-): string {
-  return (
-    verifications.find(
-      (row) => row.leadId === leadId && row.fieldKey === "contract_expiry",
-    )?.status ?? "unknown"
-  );
-}
-
 /** 批量装载行的公共上下文：到期核实状态 + pending 自动任务（最早截止在前） */
 async function loadRowContext(
   leadIds: string[],

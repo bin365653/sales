@@ -2,25 +2,25 @@ import { AuthUser } from "@/lib/auth";
 import { LeadPriority } from "@/lib/format";
 import {
   comparePriorityCandidates,
-  countFilledProfileFields,
   evaluatePriorityReasons,
   PriorityCandidateCore,
 } from "@/lib/metrics";
 import { toShanghaiDateString, toUtcDateString } from "@/lib/format";
-import { shiftDateString } from "@/lib/worktime";
+import { currentExpiryMonth, expiryMonthToUtcDate, addExpiryMonths } from "@/lib/expiry";
 import { startOfShanghaiDay } from "@/lib/tasks";
 import { prisma } from "@/server/db";
 import { leadReadScope } from "@/server/permissions";
+import { TASK_GENERATION_TERMINAL_STAGES } from "@/server/services/followup-policies";
 
-// 建议优先联系规则引擎（T12，K6 / UIUX P2 核心区）。
+// 建议优先联系规则引擎（T12 + V2.0-T10 升级，K6 / D4 / UIUX §5.6 核心区）。
 //
 // K6 双轨制：`priority` 列是人工管理字段，本模块的"建议优先联系"由
 // 确定性规则生成并附理由（规则与理由文案见 src/lib/metrics.ts），
 // AI 不参与优先级计算；缺少采购信号的客户不产生任何理由（无"高意向"话术）。
 //
-// 候选集用 OR 超集查询（今日待联系 / 合同 30 天内到期 / 从未联系），
-// 规则评估在应用层逐条执行（纯函数，固定 fixtures 单测对账），
-// 排序经 comparePriorityCandidates（权重 → 合同到期 → 下次联系 → 创建时间）。
+// V2.0-T10（D4）：候选集 OR 超集改为 半年内到期 / 今日待联系 / 画像待完善
+// （核心未全核实）；won/closed 终态客户不参与（与作战列表、任务生成器同口径——
+// 终态客户不再是"待联系"）。
 
 export interface PriorityCandidateView extends PriorityCandidateCore {
   leadId: string;
@@ -40,11 +40,9 @@ export async function suggestPriorityLeads(
   const now = options.now ?? new Date();
   const limit = options.limit ?? 5;
   const today = toShanghaiDateString(now);
-  const todayStart = startOfShanghaiDay(0, now);
-  const tomorrowStart = startOfShanghaiDay(1, now);
-  // 合同到期窗口：今天（含已过期）～ 今天+30 天（@db.Date 按 UTC 日期比较）
-  const contractUpperBound = new Date(
-    `${shiftDateString(today, 30)}T00:00:00.000Z`,
+  // 半年窗口上界（月粒度 P4）：到期 ≤ M+6 月末（含已过期——过期更需核实续费）
+  const upperBound = expiryMonthToUtcDate(
+    addExpiryMonths(currentExpiryMonth(now), 7),
   );
 
   const scope = leadReadScope(user);
@@ -52,10 +50,11 @@ export async function suggestPriorityLeads(
     where: {
       deletedAt: null,
       ...(scope.ownerId ? { ownerId: scope.ownerId } : {}),
+      stage: { semanticKey: { notIn: [...TASK_GENERATION_TERMINAL_STAGES] } },
       OR: [
-        { nextContactAt: { gte: todayStart, lt: tomorrowStart } },
-        { contractExpiry: { lte: contractUpperBound } },
-        { lastContactAt: null },
+        { nextContactAt: { gte: startOfShanghaiDay(0, now), lt: startOfShanghaiDay(1, now) } },
+        { contractExpiry: { lte: upperBound, not: null } },
+        { OR: [{ profileStatus: "incomplete" as const }, { profileStatus: null }] },
       ],
     },
     select: {
@@ -67,15 +66,8 @@ export async function suggestPriorityLeads(
       contractExpiry: true,
       contractExpiryStatus: true,
       nextContactAt: true,
-      lastContactAt: true,
+      profileStatus: true,
       createdAt: true,
-      city: true,
-      industry: true,
-      mainCategory: true,
-      source: true,
-      salesTeamSize: true,
-      salesMode: true,
-      currentSystem: true,
       stage: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "asc" },
@@ -95,8 +87,8 @@ export async function suggestPriorityLeads(
           lead.nextContactAt === null
             ? null
             : toShanghaiDateString(lead.nextContactAt),
-        neverContacted: lead.lastContactAt === null,
-        profileFilledCount: countFilledProfileFields(lead),
+        profileIncomplete:
+          lead.profileStatus === "incomplete" || lead.profileStatus === null,
       },
       today,
     );

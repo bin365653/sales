@@ -98,53 +98,37 @@ export function computeRates(
   };
 }
 
-// ---------- 建议优先联系规则引擎（K6：确定性规则，AI 不参与） ----------
+// ---------- 建议优先联系规则引擎（K6 + V2.0 决策 D4：确定性规则，AI 不参与） ----------
 //
-// 规则清单（UIUX P2 / PRD §5.1 例举）：
-// 1. 合同 30 天内到期（核实状态=已确认才计入；含已过期——过期更需要尽快确认续约意向）；
+// V2.0-T10 权重重排（UIUX §5.6/§7.2）——规则清单（封闭集合）：
+// 1. 软件半年内到期（月粒度 P4，含已过期；核实状态 confirmed/stated 才计入，
+//    P3 客户自述视同已确认）——**取代 V1.0 的「合同 30 天内到期」规则**（D4）；
 // 2. 今日待联系（下次联系时间=今天，上海日界）；
-// 3. 画像完整且从未联系（核心画像 10 项中已填 ≥8 且 lastContactAt 为空）。
-// 未确认/未知的合同到期、缺少采购信号的客户不产生任何理由——
-// 规则理由是封闭集合（下方三条），绝无"高意向"等推断话术（验收项）。
+// 3. 画像待完善（核心 7 项未全部核实，P5 核实口径；**取代 V1.0 的
+//    「画像完整且从未联系」**——待完善才是待办，完整不是）。
+// 未确认/未知的到期、无任何信号的客户不产生对应理由——规则理由是封闭集合
+// （下方三条），绝无"高意向"等采购信号推断话术（验收项，V1.0 红线延续）。
 
-export const CONTRACT_EXPIRY_WINDOW_DAYS = 30;
-
-/** 核心画像字段（内置列名）；已填 ≥ PROFILE_COMPLETE_THRESHOLD 项视为"画像完整" */
-export const PROFILE_COMPLETE_FIELDS = [
-  "city",
-  "industry",
-  "mainCategory",
-  "contactName",
-  "contactPhone",
-  "source",
-  "salesTeamSize",
-  "salesMode",
-  "currentSystem",
-  "contractExpiry",
-] as const;
-
-export const PROFILE_COMPLETE_THRESHOLD = 8;
+import { addExpiryMonths, currentExpiryMonth } from "@/lib/expiry";
 
 export const PRIORITY_RULE_WEIGHTS = {
-  contractExpiring: 3,
+  expiringSoon: 3,
   dueToday: 2,
-  neverContacted: 1,
+  profileGap: 1,
 } as const;
 
-// V2.0（P2）：核实状态四态。30 天到期规则的「已确认」口径 = confirmed 或 stated
+// V2.0（P2）：核实状态四态。半年内到期规则的「已确认」口径 = confirmed 或 stated
 // （P3：客户自述即电话销售主要证据，分类/规则按已确认处理）。
 export type FactStatusValue = "unknown" | "unverified" | "stated" | "confirmed";
 
 export interface PriorityRuleInput {
-  /** 合同到期日（上海日历日 YYYY-MM-DD，@db.Date 纯日期） */
+  /** 软件到期日（上海日历日 YYYY-MM-DD，@db.Date 纯日期；null=未知） */
   contractExpiryDate: string | null;
   contractExpiryStatus: FactStatusValue;
   /** 下次联系时间所在上海日历日 */
   nextContactDate: string | null;
-  /** 从未联系 = true（lastContactAt 为空） */
-  neverContacted: boolean;
-  /** 核心画像已填项数（PROFILE_COMPLETE_FIELDS 计数） */
-  profileFilledCount: number;
+  /** 核心画像未全部核实（profileStatus ∈ {incomplete, null}，P5 核实口径） */
+  profileIncomplete: boolean;
 }
 
 export interface PriorityRuleResult {
@@ -153,29 +137,32 @@ export interface PriorityRuleResult {
   score: number;
 }
 
-function calendarDayDiff(from: string, to: string): number {
-  const fromMs = Date.parse(`${from}T00:00:00Z`);
-  const toMs = Date.parse(`${to}T00:00:00Z`);
-  if (Number.isNaN(fromMs) || Number.isNaN(toMs)) {
-    throw new Error(`非法日期字符串：${from} / ${to}`);
-  }
-  return Math.round((toMs - fromMs) / 86_400_000);
+/** 上海日历日 → 当前月 "YYYY-MM"（P4 月粒度；当日按正午+08 取月避免时区偏移） */
+function monthOfShanghaiDay(day: string): string {
+  return currentExpiryMonth(new Date(`${day}T12:00:00+08:00`));
 }
 
-/** 规则 1 理由：按到期距离给出可执行措辞（天数手工可对账） */
-export function contractExpiryReason(
-  expiryDate: string,
-  today: string,
-): string {
-  const diff = calendarDayDiff(today, expiryDate);
-  if (diff === 0) {
-    return "合同今日到期（已确认）";
-  }
-  if (diff > 0) {
-    return `合同 ${diff} 天内到期（已确认）`;
-  }
-  return `合同已过期 ${-diff} 天（已确认）`;
+/**
+ * 半年内到期判定（月粒度，与到期窗口 §4.2 同口径）：
+ * M ≤ 到期月 ≤ M+6（含第 6 个月边界）；到期月 < M = 已过期（同样计入）。
+ */
+export function isExpiryWithinSixMonths(expiryDate: string, today: string): boolean {
+  const expiryMonth = expiryDate.slice(0, 7);
+  const currentMonth = monthOfShanghaiDay(today);
+  return expiryMonth <= addExpiryMonths(currentMonth, 6);
 }
+
+/** 规则 1 理由：月粒度可执行措辞（已过期与半年内两种形态） */
+export function expiryWindowReason(expiryDate: string, today: string): string {
+  const expiryMonth = expiryDate.slice(0, 7);
+  const currentMonth = monthOfShanghaiDay(today);
+  if (expiryMonth < currentMonth) {
+    return `软件 ${expiryMonth} 已过期，需核实续费状态`;
+  }
+  return `软件 ${expiryMonth} 到期，处于半年内窗口`;
+}
+
+export const PROFILE_GAP_REASON = "画像待完善：核心信息未全部核实";
 
 /**
  * 逐条评估优先联系理由（纯函数，today 为上海日历日）。
@@ -190,15 +177,12 @@ export function evaluatePriorityReasons(
 
   if (
     input.contractExpiryDate !== null &&
-    // V2.0（P3）：stated（客户自述待复核）视同已确认
+    isExpiryWithinSixMonths(input.contractExpiryDate, today) &&
     (input.contractExpiryStatus === "confirmed" ||
       input.contractExpiryStatus === "stated")
   ) {
-    const diff = calendarDayDiff(today, input.contractExpiryDate);
-    if (diff <= CONTRACT_EXPIRY_WINDOW_DAYS) {
-      reasons.push(contractExpiryReason(input.contractExpiryDate, today));
-      score = Math.max(score, PRIORITY_RULE_WEIGHTS.contractExpiring);
-    }
+    reasons.push(expiryWindowReason(input.contractExpiryDate, today));
+    score = Math.max(score, PRIORITY_RULE_WEIGHTS.expiringSoon);
   }
 
   if (input.nextContactDate === today) {
@@ -206,31 +190,12 @@ export function evaluatePriorityReasons(
     score = Math.max(score, PRIORITY_RULE_WEIGHTS.dueToday);
   }
 
-  if (
-    input.neverContacted &&
-    input.profileFilledCount >= PROFILE_COMPLETE_THRESHOLD
-  ) {
-    reasons.push("画像完整且从未联系");
-    score = Math.max(score, PRIORITY_RULE_WEIGHTS.neverContacted);
+  if (input.profileIncomplete) {
+    reasons.push(PROFILE_GAP_REASON);
+    score = Math.max(score, PRIORITY_RULE_WEIGHTS.profileGap);
   }
 
   return { reasons, score };
-}
-
-/** 核心画像已填项数（null/undefined/空串/NaN 视为未填） */
-export function countFilledProfileFields(
-  values: Record<string, unknown>,
-): number {
-  return PROFILE_COMPLETE_FIELDS.filter((key) => {
-    const value = values[key];
-    if (value === null || value === undefined || value === "") {
-      return false;
-    }
-    if (typeof value === "number" && Number.isNaN(value)) {
-      return false;
-    }
-    return true;
-  }).length;
 }
 
 export interface PriorityCandidateCore {
@@ -244,7 +209,7 @@ export interface PriorityCandidateCore {
   createdAt: string;
 }
 
-/** 建议优先联系排序：规则权重降序 → 合同到期升序 → 下次联系升序 → 创建时间升序 */
+/** 建议优先联系排序：规则权重降序 → 到期升序 → 下次联系升序 → 创建时间升序 */
 export function comparePriorityCandidates(
   a: PriorityCandidateCore,
   b: PriorityCandidateCore,
@@ -268,16 +233,15 @@ export function comparePriorityCandidates(
   return 0;
 }
 
-/** 规则说明（UIUX §7.2 合规文案原样，工作台 ⓘ 展示） */
+/** 规则说明（UIUX §7.2 合规文案原样，工作台 ⓘ 展示；D4 替换 V1.0 30 天版本） */
 export const PRIORITY_RULE_EXPLANATION =
-  "建议优先联系由固定规则生成并附理由；AI 不参与优先级计算。缺少采购信号时不会将客户标记为高意向。";
+  "建议优先联系由固定规则生成并附理由:软件半年内到期 > 今日待联系 > 画像待完善;AI 不参与优先级计算。";
 
 /** 全部可能出现的规则理由（封闭集合，供测试断言"无高意向话术"） */
 export const PRIORITY_REASON_VOCABULARY = [
-  "合同今日到期（已确认）",
-  "合同已过期",
-  "天内到期（已确认）",
-  "天（已确认）",
+  "软件 ",
+  "已过期，需核实续费状态",
+  "到期，处于半年内窗口",
   "今日待联系",
-  "画像完整且从未联系",
+  PROFILE_GAP_REASON,
 ] as const;

@@ -15,7 +15,7 @@ import { prisma } from "@/server/db";
 import { leadReadScope } from "@/server/permissions";
 import type { LeadQuadrantCode } from "@/lib/quadrant";
 import { QuadrantBadge } from "@/components/leads/quadrant-badge";
-import { WORKBENCH_TABS, type WorkbenchTabKey } from "@/lib/workbench";
+import { WORKBENCH_TABS } from "@/lib/workbench";
 import type { WorkbenchRow } from "@/server/services/workbench";
 import { PRIORITY_RULE_EXPLANATION } from "@/lib/metrics";
 

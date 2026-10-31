@@ -377,28 +377,40 @@ describe("任务计数：工作台卡片与任务中心同一实现", () => {
   });
 });
 
-describe("建议优先联系（K6 规则引擎，验收项）", () => {
-  it("排序与理由逐条一致；未确认合同不产生理由", async () => {
+describe("建议优先联系（K6 规则引擎，验收项；V2.0-T10 D4 权重重排）", () => {
+  it("排序与理由逐条一致：半年内到期 > 今日待联系 > 画像待完善", async () => {
     const suggestions = await suggestPriorityLeads(salesA, { now: NOW, limit: 5 });
+    // 权重：A9/A1 = 到期(3)+今日(2)+画像(1)；A2 = 今日(2)+画像(1)；
+    // A4/A7 = 仅画像(1)——同分内 A4 有到期日排前，A7/A3/A8 按 createdAt。
+    // 注意：直插夹具未经画像引擎，profileStatus=null → 画像待完善规则对
+    // 全部夹具生效（存量未编辑客户恒为待完善，与 T04 口径一致）。
     expect(suggestions.map((row) => row.name)).toEqual([
       "指标A9",
       "指标A1",
       "指标A2",
+      "指标A4",
+      "指标A3",
     ]);
     expect(suggestions[0]!.reasons).toEqual([
-      "合同 2 天内到期（已确认）",
+      "软件 2027-03 到期，处于半年内窗口",
       "今日待联系",
+      "画像待完善：核心信息未全部核实",
     ]);
     expect(suggestions[1]!.reasons).toEqual([
-      "合同 8 天内到期（已确认）",
+      "软件 2027-03 到期，处于半年内窗口",
       "今日待联系",
+      "画像待完善：核心信息未全部核实",
     ]);
     expect(suggestions[2]!.reasons).toEqual([
       "今日待联系",
-      "画像完整且从未联系",
+      "画像待完善：核心信息未全部核实",
     ]);
-    // A4：合同到期但 unverified → 不出现（无采购信号不标高意向）
-    expect(suggestions.map((row) => row.name)).not.toContain("指标A4");
+    expect(suggestions[3]!.reasons).toEqual(["画像待完善：核心信息未全部核实"]);
+    // A4：合同到期但 unverified → 无到期理由（无采购信号不出到期话术），
+    // 仅以画像待完善进入列表
+    expect(
+      suggestions[3]!.reasons.every((reason) => !reason.includes("软件")),
+    ).toBe(true);
   });
 
   it("理由话术为封闭集合：全量输出无'高意向'", async () => {
@@ -427,6 +439,8 @@ describe("工作台汇总（SSR 与 API 共用实现）", () => {
       "指标A9",
       "指标A1",
       "指标A2",
+      "指标A4",
+      "指标A3",
     ]);
 
     // 最近沟通：时间倒序，第一条 = A1 周三 09:00（相对 10:00 → 1 小时前）
