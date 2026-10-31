@@ -4,6 +4,10 @@ import { getCurrentUser } from "@/server/auth/current-user";
 import { PRIORITY_RULE_EXPLANATION } from "@/lib/metrics";
 import { PRIORITY_BADGE_CLASS, PRIORITY_LABELS } from "@/lib/format";
 import { getWorkbenchSummary } from "@/server/metrics/engine";
+import { prisma } from "@/server/db";
+import { leadReadScope } from "@/server/permissions";
+import type { LeadQuadrantCode } from "@/lib/quadrant";
+import { QuadrantBadge } from "@/components/leads/quadrant-badge";
 import { CopyPhoneButton } from "@/components/dashboard/copy-phone-button";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +17,7 @@ export const dynamic = "force-dynamic";
 // 今日三卡 → /leads?nextContact=today 与任务中心；本周概览（C13 周一起算，
 // T13 起整卡跳转看板并预设"本周"）；建议优先联系（K6 规则引擎，理由必显）；
 // 最近沟通记录（10 条，时间倒序）。
+// V2.0-T04：四象限分布入口条——象限分布一键跳转线索池对应筛选。
 
 const CARD_LINK_CLASS =
   "block rounded-lg border border-gray-200 bg-white p-4 transition hover:border-blue-300 hover:shadow-sm";
@@ -74,6 +79,17 @@ export default async function WorkbenchPage() {
   const summary = await getWorkbenchSummary(user);
   const { today, week } = summary;
 
+  // V2.0-T04：象限分布（与列表筛选同一数据范围口径）
+  const quadrantGroups = await prisma.lead.groupBy({
+    by: ["quadrantCode"],
+    _count: { _all: true },
+    where: { ...leadReadScope(user), deletedAt: null },
+  });
+  const quadrantCounts = new Map<string, number>(
+    quadrantGroups.map((group) => [group.quadrantCode ?? "pending", group._count._all]),
+  );
+  const quadrantOrder: (LeadQuadrantCode | "pending")[] = ["a", "b", "c", "d", "pending"];
+
   return (
     <section className="mx-auto flex max-w-6xl flex-col gap-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -81,6 +97,23 @@ export default async function WorkbenchPage() {
         <span className="text-sm text-gray-500">
           {today.date} {today.weekday}
         </span>
+      </div>
+
+      {/* V2.0-T04：四象限分布入口条（点击跳线索池对应筛选） */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-3">
+        <span className="mr-1 text-sm font-medium text-gray-700">四象限分布</span>
+        {quadrantOrder.map((code) => (
+          <Link
+            key={code}
+            href={`/leads?quadrant=${code}`}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 transition hover:bg-gray-50"
+          >
+            <QuadrantBadge code={code} />
+            <span className="text-sm font-semibold text-gray-800">
+              {quadrantCounts.get(code) ?? 0}
+            </span>
+          </Link>
+        ))}
       </div>
 
       {/* 今日三卡 + 本周概览（UIUX P2 桌面布局） */}

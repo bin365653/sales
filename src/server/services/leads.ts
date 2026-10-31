@@ -35,6 +35,7 @@ import {
   VerificationSourceValue,
 } from "@/server/services/lead-verifications";
 import { getEnabledDictValueMap } from "@/server/services/dicts";
+import { recomputeLeadClassification } from "@/server/services/profile";
 
 // 线索服务（T03）：新建/编辑/详情/软删除/阶段流转/列表。
 // 关键不变量：
@@ -527,6 +528,8 @@ export async function insertLeadWithEvent(
   if (verification.writes.length > 0) {
     await applyVerificationWrites(tx, lead.id, verification.writes);
   }
+  // V2.0-T04：象限与完善度重算（创建即分类；双确认时落 quadrant_code + 事件）
+  await recomputeLeadClassification(tx, lead.id, actor.id);
   await tx.leadEvent.create({
     data: {
       leadId: lead.id,
@@ -639,6 +642,8 @@ export async function updateLead(
     if (computed.writes.length > 0) {
       await applyVerificationWrites(tx, id, computed.writes);
     }
+    // V2.0-T04：象限与完善度重算（编辑触发；quadrant_changed 事件在重算内写）
+    await recomputeLeadClassification(tx, id, actor.id);
     if (Object.keys(changedDetail).length > 0) {
       // detail 含变更明细（from/to/statusFrom/statusTo）：字段值变化保留历史，
       // 不静默覆盖（联系方式在写入计算层脱敏为「已变更」）

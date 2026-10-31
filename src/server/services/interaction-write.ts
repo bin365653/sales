@@ -15,6 +15,7 @@ import {
 import { buildStageSnapshot } from "@/server/services/stages";
 import { applyVerificationWrites } from "@/server/services/lead-verifications";
 import type { VerificationWrite } from "@/server/services/lead-verifications";
+import { recomputeLeadClassification } from "@/server/services/profile";
 import { LEGACY_STATUS_COLUMN_BY_FIELD } from "@/lib/lead-fields";
 import { normalizeExpiryInput } from "@/lib/expiry";
 
@@ -350,9 +351,9 @@ export async function applyInteractionWrite(
         } as unknown as Prisma.InputJsonValue,
       },
     });
+    // V2.0-T04：确认动作触发象限/完善度重算（quadrant_changed 事件在重算内写）
+    await recomputeLeadClassification(tx, lead.id, actorId);
   }
-  // V2-T04：确认动作若触及分类轴字段（next_gen_mobile_order/qince_interest），
-  // 此处将触发象限重算（quadrant_changed 事件 + profile_status 维护）。
 
   if (advance) {
     await writeAdvanceEvent(tx, lead.id, actorId, advance, created.id);

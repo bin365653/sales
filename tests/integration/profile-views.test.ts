@@ -28,7 +28,8 @@ describe("新字段空值与到期月粒度", () => {
     expect(empty.qinceInterest).toBeNull();
     expect(empty.salesTeamScale).toBeNull();
     expect(empty.quadrantCode).toBeNull();
-    expect(empty.profileStatus).toBeNull();
+    // V2.0-T04：创建即计算完善度（核心 0/7 → incomplete）
+    expect(empty.profileStatus).toBe("incomplete");
 
     const monthly = await createLead(sales, {
       name: "月粒度到期客户",

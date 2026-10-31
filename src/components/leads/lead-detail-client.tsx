@@ -13,6 +13,7 @@ import {
   type LeadPriority,
 } from "@/lib/format";
 import { LeadForm } from "@/components/leads/lead-form";
+import { QuadrantBadge } from "@/components/leads/quadrant-badge";
 import {
   InteractionsPanel,
   type InteractionView,
@@ -103,6 +104,30 @@ export interface MissingFieldItem {
   script: string;
 }
 
+/** 分类信息卡数据（V2.0-T04，UIUX §4.4）：象限 + 依据 + 最近变化 + 经营建议 */
+export interface ClassificationView {
+  /** null = 画像待完善 */
+  quadrant: "a" | "b" | "c" | "d" | null;
+  computedAtLabel: string | null;
+  basis: {
+    xLabel: string;
+    xValueText: string;
+    xStatusText: string;
+    yLabel: string;
+    yValueText: string;
+    yStatusText: string;
+  };
+  advice: string | null;
+  missing: string[];
+  lastChange: {
+    fromLabel: string;
+    toLabel: string;
+    dateLabel: string;
+    actorName: string | null;
+    sourceText: string | null;
+  } | null;
+}
+
 export interface LeadDetailClientProps {
   lead: LeadHeaderView;
   groups: DisplayGroup[];
@@ -129,6 +154,8 @@ export interface LeadDetailClientProps {
   verifyHistory?: VerifyHistoryItem[];
   /** V2.0-T03：核心画像缺失项 + 快捷更新入口 */
   missingCoreFields?: MissingFieldItem[];
+  /** V2.0-T04：分类信息卡（象限/依据/最近变化/经营建议） */
+  classification?: ClassificationView;
   /** AI 面板初始数据（T09）：runs/用量/启用提示词版本，轮询后由面板自行刷新 */
   aiRuns: AiRunView[];
   aiUsage: AiQuotaView;
@@ -177,6 +204,7 @@ export function LeadDetailClient({
   coreVerifiedCount,
   verifyHistory = [],
   missingCoreFields = [],
+  classification,
   aiRuns,
   aiUsage,
   activePromptVersions,
@@ -378,6 +406,68 @@ export function LeadDetailClient({
         </div>
       ) : (
         <>
+          {/* V2.0-T04：分类信息卡（象限是这个页面最重要的新信息，置顶展示） */}
+          {classification && (
+            <section className="rounded-lg border border-gray-200 bg-white p-4">
+              <h2 className="mb-3 text-sm font-semibold text-gray-900">分类信息</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <QuadrantBadge code={classification.quadrant} />
+                {classification.computedAtLabel && (
+                  <span className="text-xs text-gray-400">
+                    更新于 {classification.computedAtLabel}
+                  </span>
+                )}
+              </div>
+              {classification.quadrant ? (
+                <p className="mt-2 text-sm leading-relaxed text-gray-700">
+                  依据：未{classification.basis.xValueText === "是" ? "" : ""}使用新一代
+                  ——{" "}
+                  <span className="text-gray-500">
+                    {classification.basis.xLabel} = {classification.basis.xValueText}
+                    （{classification.basis.xStatusText}）· {classification.basis.yLabel} ={" "}
+                    {classification.basis.yValueText}（{classification.basis.yStatusText}）
+                  </span>
+                </p>
+              ) : (
+                <p className="mt-2 text-sm leading-relaxed text-amber-700">
+                  缺少确认：{classification.missing.join("；")}。完成两个分类维度的核实后，
+                  客户将进入四象限。
+                </p>
+              )}
+              {classification.lastChange && (
+                <p className="mt-2 text-sm text-gray-600">
+                  最近变化：{classification.lastChange.fromLabel} →{" "}
+                  {classification.lastChange.toLabel}（{classification.lastChange.dateLabel}
+                  {classification.lastChange.actorName
+                    ? `，${classification.lastChange.actorName}`
+                    : ""}
+                  {classification.lastChange.sourceText
+                    ? `，${classification.lastChange.sourceText}`
+                    : ""}
+                  ）
+                </p>
+              )}
+              {classification.advice && (
+                <p className="mt-2 rounded-md bg-blue-50/60 px-3 py-2 text-sm leading-relaxed text-blue-800">
+                  当前经营建议：{classification.advice}
+                </p>
+              )}
+              <p className="mt-2 text-xs leading-relaxed text-gray-400">
+                ⓘ
+                分类由系统根据两个已确认维度自动计算：是否使用新一代手机开单系统、是否愿意沟通了解勤策；分类不可手动填写。
+              </p>
+              {classification.quadrant === null && (
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  className="mt-3 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700"
+                >
+                  去核实分类维度
+                </button>
+              )}
+            </section>
+          )}
+
           {/* V2.0-T03：核心画像进度（轻量提示，不强制必填——引导而非拦截） */}
           {typeof coreVerifiedCount === "number" && (
             <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -582,7 +672,9 @@ export function LeadDetailClient({
                       className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
                         item.eventType === "stage_changed"
                           ? "bg-blue-500"
-                          : "bg-gray-300"
+                          : item.eventType === "quadrant_changed"
+                            ? "bg-amber-500"
+                            : "bg-gray-300"
                       }`}
                     />
                     {index < timeline.length - 1 && (

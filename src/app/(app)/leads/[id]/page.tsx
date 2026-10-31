@@ -16,6 +16,7 @@ import { toAiRunView, type AiRunView } from "@/lib/ai-run-view";
 import type { RunTypeValue } from "@/lib/schemas/ai";
 import {
   toDateTimeInputValue,
+  toShanghaiDateString,
   toShanghaiDateTimeString,
 } from "@/lib/format";
 import {
@@ -33,7 +34,9 @@ import {
   VERIFIABLE_FIELD_KEYS,
 } from "@/lib/lead-fields";
 import { formatExpiryChip } from "@/lib/expiry";
+import { evaluateQuadrant, QUADRANT_ADVICE } from "@/lib/quadrant";
 import { FACT_STATUS_LABELS } from "@/lib/format";
+import { QUADRANT_LABELS } from "@/components/leads/quadrant-badge";
 import type { VerifyMeta } from "@/components/leads/lead-detail-client";
 import type { FieldOption } from "@/lib/lead-field-validation";
 import {
@@ -421,6 +424,18 @@ export default async function LeadDetailPage({
         case "deleted":
           title = "删除客户";
           break;
+        case "quadrant_changed": {
+          title = "分类变化";
+          const info = asDetail(event.detail) as {
+            from?: string | null;
+            to?: string | null;
+          } | null;
+          detailText =
+            info && (info.from || info.to)
+              ? `${QUADRANT_LABELS[(info.from ?? "pending") as "pending"]} → ${QUADRANT_LABELS[(info.to ?? "pending") as "pending"]}（依据双维核实状态快照）`
+              : null;
+          break;
+        }
         default:
           title = event.eventType;
       }
@@ -505,6 +520,65 @@ export default async function LeadDetailPage({
     script: CORE_VERIFY_SCRIPTS[key] ?? `请核实「${labelMap.get(key) ?? key}」`,
   }));
 
+  // ---------- V2.0-T04：分类信息卡 ----------
+
+  const axisX = {
+    value: lead.nextGenMobileOrder,
+    status: statusOf("next_gen_mobile_order"),
+  } as const;
+  const axisY = {
+    value: lead.qinceInterest,
+    status: statusOf("qince_interest"),
+  } as const;
+  const evaluation = evaluateQuadrant(
+    { value: axisX.value, status: axisX.status as "unknown" | "unverified" | "stated" | "confirmed" },
+    { value: axisY.value, status: axisY.status as "unknown" | "unverified" | "stated" | "confirmed" },
+  );
+  const lastQuadrantEvent = [...detail.events]
+    .reverse()
+    .find((event) => event.eventType === "quadrant_changed");
+  const lastQuadrantInfo = lastQuadrantEvent
+    ? (asDetail(lastQuadrantEvent.detail) as {
+        from?: string | null;
+        to?: string | null;
+      } | null)
+    : null;
+  const valueText = (value: boolean | null): string =>
+    value === null ? "未知" : value ? "是" : "否";
+  const classification = {
+    quadrant: evaluation.quadrant,
+    computedAtLabel: lead.quadrantComputedAt
+      ? toShanghaiDateTimeString(lead.quadrantComputedAt)
+      : null,
+    basis: {
+      xLabel: "是否使用新一代手机开单系统",
+      xValueText: valueText(axisX.value ?? null),
+      xStatusText:
+        FACT_STATUS_LABELS[axisX.status as keyof typeof FACT_STATUS_LABELS] ??
+        axisX.status,
+      yLabel: "是否愿意沟通了解勤策",
+      yValueText: valueText(axisY.value ?? null),
+      yStatusText:
+        FACT_STATUS_LABELS[axisY.status as keyof typeof FACT_STATUS_LABELS] ??
+        axisY.status,
+    },
+    advice: evaluation.quadrant ? QUADRANT_ADVICE[evaluation.quadrant] : null,
+    missing: evaluation.missing,
+    lastChange:
+      lastQuadrantEvent && lastQuadrantInfo
+        ? {
+            fromLabel:
+              QUADRANT_LABELS[(lastQuadrantInfo.from ?? "pending") as "pending"],
+            toLabel: QUADRANT_LABELS[(lastQuadrantInfo.to ?? "pending") as "pending"],
+            dateLabel: toShanghaiDateString(lastQuadrantEvent.occurredAt),
+            actorName: lastQuadrantEvent.actorId
+              ? (actorNames.get(lastQuadrantEvent.actorId) ?? null)
+              : null,
+            sourceText: "分类由系统重算",
+          }
+        : null,
+  };
+
   // ---------- 表单初值（原始字符串，空 = 空输入） ----------
 
   const formValues: Record<string, string | number | boolean | null> = {};
@@ -567,6 +641,7 @@ export default async function LeadDetailPage({
       coreVerifiedCount={coreVerifiedCount}
       verifyHistory={verifyHistory}
       missingCoreFields={missingCoreFields}
+      classification={classification}
       aiRuns={aiRuns}
       aiUsage={aiUsage}
       activePromptVersions={activePromptVersions}
