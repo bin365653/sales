@@ -10,8 +10,9 @@ import type { StageOptionLike } from "@/lib/k4";
 import { TASK_STATUSES, TASK_STATUS_LABELS } from "@/lib/tasks";
 
 // P6 任务中心列表（T07）：新建（线索搜索）+ 任务卡列表 + 分页。
-// 视图 Tab（今日/逾期/全部）与状态筛选由服务端页面渲染为链接（禁 JS 可用），
-// 本组件只承担卡片操作（完成/取消/编辑）与新建表单。
+// 视图 Tab（今日/逾期/全部）、状态与来源筛选由服务端页面渲染为链接
+// （禁 JS 可用），本组件承担卡片操作（完成/取消/编辑）、新建表单与
+// [立即生成]（V2.0-T06/T07 管理员手动兜底）。
 
 export interface TaskCenterListProps {
   rows: TaskView[];
@@ -20,6 +21,7 @@ export interface TaskCenterListProps {
   pageSize: number;
   view: string;
   status: string;
+  sourceType: string;
   counts: { today: number; overdue: number };
   stages: StageOptionLike[];
 }
@@ -27,12 +29,14 @@ export interface TaskCenterListProps {
 function buildHref(
   view: string,
   status: string,
+  sourceType: string,
   page: number,
   pageSize: number,
 ): string {
   const params = new URLSearchParams({
     view,
     status,
+    sourceType,
     page: String(page),
     pageSize: String(pageSize),
   });
@@ -46,6 +50,7 @@ export function TaskCenterList({
   pageSize,
   view,
   status,
+  sourceType,
   counts,
   stages,
 }: TaskCenterListProps) {
@@ -137,7 +142,7 @@ export function TaskCenterList({
         <nav className="flex items-center justify-between text-sm">
           {page > 1 ? (
             <Link
-              href={buildHref(view, status, page - 1, pageSize)}
+              href={buildHref(view, status, sourceType, page - 1, pageSize)}
               className="rounded-md border border-gray-300 px-3 py-1.5 text-gray-600 transition hover:bg-gray-50"
             >
               ‹ 上一页
@@ -150,7 +155,7 @@ export function TaskCenterList({
           </span>
           {page < totalPages ? (
             <Link
-              href={buildHref(view, status, page + 1, pageSize)}
+              href={buildHref(view, status, sourceType, page + 1, pageSize)}
               className="rounded-md border border-gray-300 px-3 py-1.5 text-gray-600 transition hover:bg-gray-50"
             >
               下一页 ›

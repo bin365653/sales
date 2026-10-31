@@ -106,8 +106,10 @@ test("核心闭环：登录→导入→详情→AI→记录→任务→看板", 
   // ---------- ⑥ 任务中心（全部视图 → 完成弹窗：沟通结果 + 下一步任务单事务） ----------
   await page.goto("/tasks");
   await expect(page.getByRole("heading", { name: "任务中心" })).toBeVisible();
-  // 同建任务截止为明天：切到「全部」视图断言（今日视图只含今日与逾期）
-  await page.getByRole("link", { name: "全部", exact: true }).click();
+  // 同建任务截止为明天：切到「全部」视图断言（今日视图只含今日与逾期）。
+  // V2.0-T07 起页面另有「来源：全部」筛选 chip——视图 Tab 在来源行之前，
+  // 取 DOM 序第一个同名链接。
+  await page.getByRole("link", { name: "全部", exact: true }).first().click();
   await expect(page.getByText(TASK_TITLE).first()).toBeVisible();
   await page.getByRole("button", { name: "完成任务" }).first().click();
   await page.locator("textarea[id^='c-feedback-']").fill("报价已发送，客户要求下周给最终折扣。");

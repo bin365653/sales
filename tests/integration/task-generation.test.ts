@@ -419,7 +419,13 @@ describe("生成引擎：任务中心口径", () => {
     });
     await runTaskGeneration({ leadIds: [lead.id], actorId: admin.value!.id });
 
-    const result = await listTasks(admin.value!, { view: "today", status: "all", page: 1, pageSize: 50 });
+    const result = await listTasks(admin.value!, {
+      view: "today",
+      status: "all",
+      sourceType: "all",
+      page: 1,
+      pageSize: 50,
+    });
     const generated = result.items.find(
       (task) => task.leadId === lead.id && task.sourceType === "expiry_monthly",
     );

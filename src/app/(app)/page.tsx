@@ -6,6 +6,7 @@ import { PRIORITY_BADGE_CLASS, PRIORITY_LABELS } from "@/lib/format";
 import { getWorkbenchSummary } from "@/server/metrics/engine";
 import { prisma } from "@/server/db";
 import { leadReadScope } from "@/server/permissions";
+import { countLeadsByExpiryView } from "@/server/services/leads";
 import type { LeadQuadrantCode } from "@/lib/quadrant";
 import { QuadrantBadge } from "@/components/leads/quadrant-badge";
 import { CopyPhoneButton } from "@/components/dashboard/copy-phone-button";
@@ -90,6 +91,15 @@ export default async function WorkbenchPage() {
   );
   const quadrantOrder: (LeadQuadrantCode | "pending")[] = ["a", "b", "c", "d", "pending"];
 
+  // V2.0-T07：软件到期四视图计数（与列表到期筛选同一实现，口径一致）
+  const expiryCounts = await countLeadsByExpiryView(user);
+  const expiryViews: { key: string; label: string; count: number; danger?: boolean }[] = [
+    { key: "within_6m", label: "未来 6 个月", count: expiryCounts.within_6m },
+    { key: "within_1m", label: "未来 1 个月", count: expiryCounts.within_1m },
+    { key: "expired", label: "已过期", count: expiryCounts.expired, danger: true },
+    { key: "unknown", label: "未知待核实", count: expiryCounts.unknown },
+  ];
+
   return (
     <section className="mx-auto flex max-w-6xl flex-col gap-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -114,6 +124,31 @@ export default async function WorkbenchPage() {
             </span>
           </Link>
         ))}
+      </div>
+
+      {/* V2.0-T07：软件到期入口条（四视图计数，点击跳线索池对应筛选；
+          半年内到期客户的月度任务由系统强制生成） */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white p-3">
+        <span className="mr-1 flex items-center gap-1 text-sm font-medium text-gray-700">
+          📅 软件到期
+        </span>
+        {expiryViews.map((view) => (
+          <Link
+            key={view.key}
+            href={`/leads?expiryView=${view.key}`}
+            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-sm transition hover:bg-gray-50 ${
+              view.danger && view.count > 0
+                ? "border-red-200 bg-red-50 text-red-700"
+                : "border-transparent text-gray-600"
+            }`}
+          >
+            <span>{view.label}</span>
+            <span className="font-semibold text-gray-800">{view.count}</span>
+          </Link>
+        ))}
+        <span className="ml-auto text-xs text-gray-400">
+          半年内到期的客户，系统每月自动生成一次跟进任务
+        </span>
       </div>
 
       {/* 今日三卡 + 本周概览（UIUX P2 桌面布局） */}

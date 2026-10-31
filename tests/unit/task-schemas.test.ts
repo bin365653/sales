@@ -136,7 +136,13 @@ describe("interactionCreateWithTaskSchema（沟通保存同时创建任务）", 
 describe("taskListQuerySchema", () => {
   it("默认今日视图 + 全部状态 + 第 1 页 20 条", () => {
     const parsed = taskListQuerySchema.parse({});
-    expect(parsed).toEqual({ view: "today", status: "all", page: 1, pageSize: 20 });
+    expect(parsed).toEqual({
+      view: "today",
+      status: "all",
+      sourceType: "all",
+      page: 1,
+      pageSize: 20,
+    });
   });
 
   it("URL 查询字符串可解析；非法视图拒绝", () => {

@@ -4,10 +4,17 @@ import { getCurrentUser } from "@/server/auth/current-user";
 import { listStages } from "@/server/services/stages";
 import { listTasks } from "@/server/services/tasks";
 import { runTaskGenerationLazy } from "@/server/services/task-generation";
-import { taskListQuerySchema, TASK_LIST_VIEWS, VIEW_LABELS } from "@/lib/schemas/task";
+import {
+  taskListQuerySchema,
+  TASK_LIST_VIEWS,
+  VIEW_LABELS,
+  TASK_SOURCE_FILTERS,
+  TASK_SOURCE_FILTER_LABELS,
+} from "@/lib/schemas/task";
 import { TASK_STATUSES, TASK_STATUS_LABELS } from "@/lib/tasks";
 import { toTaskView } from "@/components/tasks/task-view";
 import { TaskCenterList } from "@/components/tasks/task-center-list";
+import { GenerateNowButton } from "@/components/tasks/generate-now-button";
 
 export const dynamic = "force-dynamic";
 
@@ -20,8 +27,8 @@ interface SearchParams {
   [key: string]: string | string[] | undefined;
 }
 
-function buildTabHref(view: string, status: string): string {
-  const params = new URLSearchParams({ view, status, pageSize: "20" });
+function buildTabHref(view: string, status: string, sourceType: string): string {
+  const params = new URLSearchParams({ view, status, sourceType, pageSize: "20" });
   return `/tasks?${params.toString()}`;
 }
 
@@ -90,12 +97,15 @@ export default async function TasksPage({
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <div>
-        <h1 className="text-xl font-semibold">任务中心</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          今日待办 {result.counts.today} 条 · 逾期 {result.counts.overdue} 条
-          （逾期按自然日判定：截止日早于今天即逾期）
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">任务中心</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            今日待办 {result.counts.today} 条 · 逾期 {result.counts.overdue} 条
+            （逾期按自然日判定：截止日早于今天即逾期）
+          </p>
+        </div>
+        {user.role === "admin" && <GenerateNowButton />}
       </div>
 
       {/* 视图 Tab + 状态筛选（全部视图生效） */}
@@ -103,7 +113,7 @@ export default async function TasksPage({
         {tabs.map((tab) => (
           <Link
             key={tab.view}
-            href={buildTabHref(tab.view, query.status)}
+            href={buildTabHref(tab.view, query.status, query.sourceType)}
             className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
               query.view === tab.view
                 ? "bg-blue-600 text-white"
@@ -129,7 +139,7 @@ export default async function TasksPage({
               (option) => (
                 <Link
                   key={option.value}
-                  href={buildTabHref("all", option.value)}
+                  href={buildTabHref("all", option.value, query.sourceType)}
                   className={`rounded px-2 py-1 text-xs transition ${
                     query.status === option.value
                       ? "bg-gray-800 text-white"
@@ -144,6 +154,30 @@ export default async function TasksPage({
         )}
       </div>
 
+      {/* 来源筛选（V2.0-T07，UIUX §5.4）：全部/手工约定/到期月度/四象限周期/画像补充 */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2">
+        <span className="text-xs text-gray-400">来源：</span>
+        {TASK_SOURCE_FILTERS.map((source) => (
+          <Link
+            key={source}
+            href={buildTabHref(query.view, query.status, source)}
+            className={`rounded px-2 py-1 text-xs transition ${
+              query.sourceType === source
+                ? "bg-blue-600 text-white"
+                : "border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            {TASK_SOURCE_FILTER_LABELS[source]}
+          </Link>
+        ))}
+        <span
+          className="ml-auto text-xs text-gray-400"
+          title="排序：客户约定 > 预约演示/拜访 > 到期月度 > 画像补充 > 四象限周期；同优先级按逾期与阶段。客户约定的时间优先于系统生成的周期任务，系统不会覆盖或取消约定任务。"
+        >
+          排序：约定 → 预约 → 月度 → 画像 → 周期 ⓘ
+        </span>
+      </div>
+
       <TaskCenterList
         rows={rows}
         total={result.total}
@@ -151,6 +185,7 @@ export default async function TasksPage({
         pageSize={result.pageSize}
         view={query.view}
         status={query.status}
+        sourceType={query.sourceType}
         counts={result.counts}
         stages={stageOptions}
       />

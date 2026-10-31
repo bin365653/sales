@@ -195,6 +195,10 @@ export default async function LeadDetailPage({
           name: detail.lead.name,
           stageName: detail.lead.stage.name,
           stageSortOrder: detail.lead.stage.sortOrder,
+          contractExpiry: detail.lead.contractExpiry,
+          expiryStatus:
+            detail.verifications?.find((row) => row.fieldKey === "contract_expiry")
+              ?.status ?? null,
         },
       },
       now,

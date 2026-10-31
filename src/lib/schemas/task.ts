@@ -133,10 +133,30 @@ export const VIEW_LABELS: Record<TaskListView, string> = {
   all: "全部",
 };
 
+// 来源筛选（V2.0-T07，UIUX §5.4）：全部/手工约定/到期月度/四象限周期/画像补充
+export const TASK_SOURCE_FILTERS = [
+  "all",
+  "manual",
+  "expiry_monthly",
+  "quadrant_periodic",
+  "profile_gap",
+] as const;
+export type TaskSourceFilter = (typeof TASK_SOURCE_FILTERS)[number];
+
+export const TASK_SOURCE_FILTER_LABELS: Record<TaskSourceFilter, string> = {
+  all: "全部",
+  manual: "手工/约定",
+  expiry_monthly: "到期月度",
+  quadrant_periodic: "四象限周期",
+  profile_gap: "画像补充",
+};
+
 export const taskListQuerySchema = z.object({
   view: z.enum(TASK_LIST_VIEWS).default("today"),
   /** 仅"全部"视图生效；今日/逾期恒为待处理 */
   status: z.enum([...TASK_STATUSES, "all"]).default("all"),
+  /** 来源筛选（V2.0-T07）：默认全部 */
+  sourceType: z.enum(TASK_SOURCE_FILTERS).default("all"),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });

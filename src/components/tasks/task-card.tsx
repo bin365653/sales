@@ -10,13 +10,16 @@ import {
 } from "@/lib/tasks";
 import { CompleteTaskForm } from "@/components/tasks/complete-task-form";
 import { NewTaskForm } from "@/components/tasks/new-task-form";
-import { taskDueDisplay, type TaskView } from "@/components/tasks/task-view";
+import { SOURCE_BADGE_CLASS, taskDueDisplay, type TaskView } from "@/components/tasks/task-view";
 import type { StageOptionLike } from "@/lib/k4";
 
 // 任务卡（UIUX P6 卡片样式的 T07 落地，P5 任务区块与 P6 任务中心共用）：
 // 类型徽章 + 标题 + 状态徽章 + 截止时间（今日"今天 HH:mm"、逾期红字"已逾期 X 天"、
 // 逾期整卡左侧 3px 红条）；待处理任务可 完成（弹窗式表单：沟通结果+下一任务）/
 // 取消（简单确认，C11 只可取消不可删）/ 编辑；已完成显示完成时间与沟通记录链接。
+// V2.0-T07：自动任务带来源徽章（到期月度=琥珀/四象限周期=蓝/画像补充=青）+
+// 原因行（生成规则文案，服务端派生）；手工约定任务（priority 1）显示
+// 「客户约定」小签（📌 约定优先于系统周期任务，UIUX §3.1/§7.2）。
 
 export interface TaskCardProps {
   task: TaskView;
@@ -79,6 +82,24 @@ export function TaskCard({ task, stages, showLead = false, onChanged }: TaskCard
       }`}
     >
       <div className="flex flex-wrap items-center gap-2">
+        {task.sourceLabel && (
+          <span
+            className={`rounded px-1.5 py-0.5 text-xs ${
+              SOURCE_BADGE_CLASS[task.sourceType] ?? "bg-gray-100 text-gray-600"
+            }`}
+            title="系统自动生成的跟进任务（来源可解释）"
+          >
+            {task.sourceLabel}
+          </span>
+        )}
+        {task.isPinned && (
+          <span
+            className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-xs text-red-600"
+            title="客户约定的时间优先于系统生成的周期任务，系统不会覆盖或取消约定任务"
+          >
+            📌 客户约定
+          </span>
+        )}
         <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
           {TASK_TYPE_LABELS[task.type as keyof typeof TASK_TYPE_LABELS] ?? task.type}
         </span>
@@ -97,6 +118,10 @@ export function TaskCard({ task, stages, showLead = false, onChanged }: TaskCard
         </span>
       </div>
 
+      {task.reason && (
+        <p className="mt-1 text-xs text-gray-500">原因：{task.reason}</p>
+      )}
+
       {showLead && (
         <p className="mt-1 text-xs text-gray-500">
           客户：
@@ -106,6 +131,14 @@ export function TaskCard({ task, stages, showLead = false, onChanged }: TaskCard
           >
             {task.lead.name}
           </Link>
+          {task.expiryDisplay ? (
+            <span
+              className="ml-2 text-gray-400"
+              title="客户软件到期时间（月粒度口径）"
+            >
+              · 到期 {task.expiryDisplay}
+            </span>
+          ) : null}
         </p>
       )}
       {task.remark && (

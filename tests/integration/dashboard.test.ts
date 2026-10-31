@@ -363,7 +363,17 @@ describe("任务计数：工作台卡片与任务中心同一实现", () => {
     expect(listed.counts).toEqual(counts);
 
     expect(await getTaskCounts(salesB, NOW)).toEqual({ today: 0, overdue: 0 });
-    expect(await getTaskCounts(admin, NOW)).toEqual({ today: 1, overdue: 1 });
+    // 管理员=全量口径：精确数字对共享库并行测试敏感（其他测试文件的 pending
+    // 夹具任务同刻会计入）——改为「含本套夹具的下界 + 两种实现一致」；
+    // 精确计数由 salesA/salesB 的本人范围承担（V2.0-T07 起并行套件自动任务
+    // 夹具增多，全量精确断言天然易碎）。
+    const adminCounts = await getTaskCounts(admin, NOW);
+    expect(adminCounts.today).toBeGreaterThanOrEqual(1);
+    expect(adminCounts.overdue).toBeGreaterThanOrEqual(1);
+    const adminListed = await listTasks(admin, taskListQuerySchema.parse({ view: "all" }), {
+      now: NOW,
+    });
+    expect(adminListed.counts).toEqual(adminCounts);
   });
 });
 

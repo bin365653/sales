@@ -262,6 +262,10 @@ export async function listLeadTasks(
   assertLeadReadable(actor, lead.ownerId);
   const rows = await prisma.task.findMany({
     where: { leadId },
+    include: {
+      // 自动任务来源徽章/原因行需要策略区间（V2.0-T07）
+      policy: { select: { quadrantCode: true, intervalDays: true } },
+    },
     orderBy: [{ dueAt: "asc" }, { id: "asc" }],
   });
   // 待处理在前（按截止时间升序），已完成/已取消按完成时间倒序殿后
@@ -308,7 +312,16 @@ export async function getTaskCounts(
 
 export interface TaskListResult {
   items: (Task & {
-    lead: { id: string; name: string; stageId: string; stage: LeadStage };
+    lead: {
+      id: string;
+      name: string;
+      stageId: string;
+      stage: LeadStage;
+      contractExpiry: Date | null;
+      /** contract_expiry 核实行状态（原因行文案的窗口口径） */
+      expiryStatus: string;
+    };
+    policy: { quadrantCode: string | null; intervalDays: number } | null;
     interaction: { id: string; occurredAt: Date } | null;
   })[];
   total: number;
@@ -349,15 +362,41 @@ export async function listTasks(
         ...(query.status !== "all" ? { status: query.status as TaskStatusValue } : {}),
       };
   }
+  // V2.0-T07：来源筛选（到期月度/四象限周期/画像补充/手工约定）
+  if (query.sourceType !== "all") {
+    where = { ...where, sourceType: query.sourceType };
+  }
 
   const [items, total] = await Promise.all([
     prisma.task.findMany({
       where,
       include: {
-        lead: { select: { id: true, name: true, stageId: true, stage: true } },
+        lead: {
+          select: {
+            id: true,
+            name: true,
+            stageId: true,
+            stage: true,
+            contractExpiry: true,
+            fieldVerifications: {
+              where: { fieldKey: "contract_expiry" },
+              select: { status: true },
+              take: 1,
+            },
+          },
+        },
+        policy: { select: { quadrantCode: true, intervalDays: true } },
         interaction: { select: { id: true, occurredAt: true } },
       },
-      orderBy: [{ dueAt: "asc" }, { id: "asc" }],
+      // V2.0-T07 排序（§4.4，服务端排序前端不重排）：优先级 1→5
+      // （约定→预约→月度→画像→周期），同优先级按截止时间（逾期久的在前），
+      // 再按客户阶段；priority 恒非空（存量已回填、新建写入）
+      orderBy: [
+        { priority: "asc" },
+        { dueAt: "asc" },
+        { lead: { stage: { sortOrder: "asc" } } },
+        { id: "asc" },
+      ],
       skip: (query.page - 1) * query.pageSize,
       take: query.pageSize,
     }),
@@ -366,7 +405,17 @@ export async function listTasks(
   const counts = await getTaskCounts(actor, now);
 
   return {
-    items,
+    items: items.map((task) => ({
+      ...task,
+      lead: {
+        id: task.lead.id,
+        name: task.lead.name,
+        stageId: task.lead.stageId,
+        stage: task.lead.stage,
+        contractExpiry: task.lead.contractExpiry,
+        expiryStatus: task.lead.fieldVerifications[0]?.status ?? "unknown",
+      },
+    })),
     total,
     page: query.page,
     pageSize: query.pageSize,

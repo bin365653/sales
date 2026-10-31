@@ -40,7 +40,14 @@ function shanghai(value: string): Date {
 }
 
 function queryOf(overrides: Partial<TaskListQuery> = {}): TaskListQuery {
-  return { view: "today", status: "all", page: 1, pageSize: 20, ...overrides };
+  return {
+    view: "today",
+    status: "all",
+    sourceType: "all",
+    page: 1,
+    pageSize: 20,
+    ...overrides,
+  };
 }
 
 async function expectApiError(

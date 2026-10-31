@@ -897,8 +897,7 @@ export async function listLeads(
   query: LeadListQuery,
 ): Promise<{
   items: (Lead & { stage: LeadStage })[];
-  total: number;
-  page: number;
+  total: number;  page: number;
   pageSize: number;
 }> {
   const where = buildLeadListWhere(actor, query);
@@ -915,6 +914,35 @@ export async function listLeads(
   ]);
 
   return { items, total, page: query.page, pageSize: query.pageSize };
+}
+
+/**
+ * 到期四视图计数（V2.0-T07 首页「软件到期」入口条）：
+ * 与列表 buildExpiryFilters 同一实现（口径必然一致）——
+ * 未来 6 个月 / 未来 1 个月 / 已过期 / 未知（月粒度，P4）。
+ */
+export async function countLeadsByExpiryView(
+  actor: AuthUser,
+  now: Date = new Date(),
+): Promise<{ within_6m: number; within_1m: number; expired: number; unknown: number }> {
+  const views = ["within_6m", "within_1m", "expired", "unknown"] as const;
+  const counts = await Promise.all(
+    views.map((view) =>
+      prisma.lead.count({
+        where: buildLeadListWhere(
+          actor,
+          { expiryView: view } as unknown as LeadListQuery,
+          { now },
+        ),
+      }),
+    ),
+  );
+  return {
+    within_6m: counts[0]!,
+    within_1m: counts[1]!,
+    expired: counts[2]!,
+    unknown: counts[3]!,
+  };
 }
 
 // ---------- 批量修改（T04，PATCH /api/leads/batch） ----------
