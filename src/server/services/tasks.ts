@@ -39,6 +39,15 @@ import { assertLeadReadable, assertLeadWritable, leadReadScope } from "@/server/
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
+// ---------- 优先级映射（V2.0-T05，§4.4） ----------
+// 手工任务在创建时按类型写入优先级：客户约定类=1、预约演示/拜访=2；
+// 自动任务由生成引擎写入 3（到期月度）/4（画像补充）/5（象限周期）。
+// 列表排序按 priority 升序 + 逾期/阶段综合（§4.4：约定任务恒排前）。
+
+export function manualTaskPriority(type: Task["type"]): number {
+  return type === "online_demo" || type === "offline_visit" ? 2 : 1;
+}
+
 // ---------- 创建 ----------
 
 export interface InsertTaskParams {
@@ -65,6 +74,7 @@ export async function insertTaskInTx(
       title: params.title,
       dueAt: params.dueAt,
       remark: params.remark,
+      priority: manualTaskPriority(params.type),
     },
   });
 }
@@ -125,7 +135,9 @@ export async function updateTask(
   const updated = await prisma.task.updateMany({
     where: { id: task.id, status: "pending" },
     data: {
-      ...(input.type !== undefined ? { type: input.type } : {}),
+      ...(input.type !== undefined
+        ? { type: input.type, priority: manualTaskPriority(input.type) }
+        : {}),
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.dueAt !== undefined ? { dueAt: parseShanghaiDate(input.dueAt) } : {}),
       ...(input.remark !== undefined ? { remark: input.remark ?? null } : {}),

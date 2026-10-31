@@ -12,6 +12,7 @@ import {
 import { listPromptTemplates } from "@/server/services/prompts";
 import { listAuditLogs } from "@/server/services/audit-logs";
 import { listDictEntries } from "@/server/services/dicts";
+import { listFollowUpPolicies } from "@/server/services/followup-policies";
 import {
   DICT_FIELD_KEYS,
   DICT_FIELD_LABELS,
@@ -33,6 +34,7 @@ import { PromptVersionsManager } from "@/components/settings/prompt-versions-man
 import { StagesManager } from "@/components/settings/stages-manager";
 import { FieldsManager } from "@/components/settings/fields-manager";
 import { DictsManager } from "@/components/settings/dicts-manager";
+import { PoliciesManager } from "@/components/settings/policies-manager";
 import { UsersManager } from "@/components/settings/users-manager";
 import { AuditLogsView } from "@/components/settings/audit-logs-view";
 
@@ -112,6 +114,8 @@ async function TabContent({
       return <FieldsTab />;
     case "dicts":
       return <DictsTab />;
+    case "policies":
+      return <PoliciesTab />;
     case "users":
       return <UsersTab user={user} />;
     case "audit":
@@ -236,6 +240,23 @@ async function DictsTab() {
     })),
   }));
   return <DictsManager fields={fields} />;
+}
+
+// 跟进策略页签（V2.0-T05，UIUX §5.5）：系统强制规则行只读 +
+// 四象限周期策略（A30/B60/C14/D90 可改，决策 D2）。
+async function PoliciesTab() {
+  const policies = await listFollowUpPolicies();
+  const items = policies.map((policy) => ({
+    id: policy.id,
+    name: policy.name,
+    quadrantCode: policy.quadrantCode,
+    intervalDays: policy.intervalDays,
+    taskType: policy.taskType,
+    advanceDays: policy.advanceDays,
+    isActive: policy.isActive,
+    isSystem: policy.isSystem,
+  }));
+  return <PoliciesManager policies={items} />;
 }
 
 async function UsersTab({ user }: { user: AuthUser }) {

@@ -241,6 +241,68 @@ async function seedCurrentSystemDict(): Promise<void> {
   );
 }
 
+/**
+ * 跟进策略 seed（V2.0-T05，实施计划 §3.2 / 决策 D2 / 口径 P6）：
+ * 4 条象限策略（A=30 / B=60 / C=14 / D=90 天，管理员可在设置中心修改）
+ * + 1 条系统月度策略（isSystem=true，不可编辑/停用，P6：半年内到期月度规则
+ * 不能被普通象限策略覆盖）。
+ * 幂等：缺则建；管理员此后对周期/类型/提前量/启停的修改原样保留。
+ */
+const FOLLOW_UP_POLICY_SEEDS: {
+  name: string;
+  quadrantCode: "a" | "b" | "c" | "d" | null;
+  intervalDays: number;
+  priority: number;
+  isSystem: boolean;
+}[] = [
+  { name: "A·第一象限周期跟进", quadrantCode: "a", intervalDays: 30, priority: 5, isSystem: false },
+  { name: "B·第二象限周期跟进", quadrantCode: "b", intervalDays: 60, priority: 5, isSystem: false },
+  { name: "C·第三象限周期跟进", quadrantCode: "c", intervalDays: 14, priority: 5, isSystem: false },
+  { name: "D·第四象限周期跟进", quadrantCode: "d", intervalDays: 90, priority: 5, isSystem: false },
+  {
+    name: "软件到期月度跟进（系统强制）",
+    quadrantCode: null,
+    intervalDays: 30,
+    priority: 3,
+    isSystem: true,
+  },
+];
+
+async function seedFollowUpPolicies(): Promise<void> {
+  let created = 0;
+  for (const item of FOLLOW_UP_POLICY_SEEDS) {
+    const existing = item.quadrantCode
+      ? await prisma.followUpPolicy.findUnique({
+          where: { quadrantCode: item.quadrantCode },
+          select: { id: true },
+        })
+      : await prisma.followUpPolicy.findFirst({
+          where: { isSystem: true },
+          select: { id: true },
+        });
+    if (existing) {
+      continue;
+    }
+    await prisma.followUpPolicy.create({
+      data: {
+        name: item.name,
+        quadrantCode: item.quadrantCode,
+        expiryCondition: item.isSystem ? "within_6m" : "beyond_6m",
+        intervalDays: item.intervalDays,
+        taskType: "follow_up",
+        advanceDays: 0,
+        priority: item.priority,
+        isActive: true,
+        isSystem: item.isSystem,
+      },
+    });
+    created += 1;
+  }
+  console.log(
+    `[seed] 跟进策略就绪：共 ${FOLLOW_UP_POLICY_SEEDS.length} 条，本次新建 ${created} 条。`,
+  );
+}
+
 async function main(): Promise<void> {
   await seedStages();
   await seedBuiltinFieldDefs();
@@ -248,6 +310,7 @@ async function main(): Promise<void> {
   await seedAdmin();
   await seedPromptTemplates();
   await seedCurrentSystemDict();
+  await seedFollowUpPolicies();
 }
 
 main()

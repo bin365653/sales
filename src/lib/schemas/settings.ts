@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TASK_TYPES } from "@/lib/tasks";
 
 // 设置中心入参 Schema（T03 部分：阶段全配置 + 自定义字段定义）。
 // 管理员专属写操作；查询对所有登录用户开放（表单需要启用中的阶段/字段）。
@@ -289,3 +290,42 @@ export const promptVersionCreateSchema = z.object({
 });
 
 export type PromptVersionCreateInput = z.infer<typeof promptVersionCreateSchema>;
+
+// ---------- 跟进策略（V2.0-T05，实施计划 §3.2 / 决策 D2 / 口径 P6） ----------
+// 5 行固定（4 象限 + 1 系统月度），仅允许改 周期/任务类型/提前量/启停——
+// 名称/象限/系统行归属为配置身份，不开放修改；系统行（isSystem）整行只读
+// （P6：半年内月度规则不可被策略覆盖，UIUX §5.5 🔒）。
+// UIUX §5.5：「周期输入 1–365 整数，行内即时校验」（错误文案 §7.3）。
+
+export const FOLLOWUP_INTERVAL_MIN = 1;
+export const FOLLOWUP_INTERVAL_MAX = 365;
+
+export const followupPolicyUpdateItemSchema = z.object({
+  id: z
+    .string()
+    .trim()
+    .regex(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      "策略 ID 不合法",
+    ),
+  intervalDays: z.coerce
+    .number()
+    .int("跟进周期需为整数")
+    .min(FOLLOWUP_INTERVAL_MIN, `跟进周期需为 ${FOLLOWUP_INTERVAL_MIN}–${FOLLOWUP_INTERVAL_MAX} 的整数`)
+    .max(FOLLOWUP_INTERVAL_MAX, `跟进周期需为 ${FOLLOWUP_INTERVAL_MIN}–${FOLLOWUP_INTERVAL_MAX} 的整数`),
+  taskType: z.enum(TASK_TYPES, { message: "任务类型不合法" }),
+  advanceDays: z.coerce
+    .number()
+    .int("任务生成提前量需为整数")
+    .min(0, "提前量不能为负")
+    .max(90, "提前量最多 90 天"),
+  isActive: z.boolean(),
+});
+
+/** [保存全部]：一次提交四条象限策略的完整行 */
+export const followupPoliciesUpdateSchema = z.object({
+  policies: z.array(followupPolicyUpdateItemSchema).min(1).max(4),
+});
+
+export type FollowupPolicyUpdateItem = z.infer<typeof followupPolicyUpdateItemSchema>;
+export type FollowupPoliciesUpdateInput = z.infer<typeof followupPoliciesUpdateSchema>;
